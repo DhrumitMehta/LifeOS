@@ -43,6 +43,4 @@ yarn-error.*
 
 # OS
 Thumbs.db
-
-# Supabase credentials
-src/config/supabase.ts
+node_modules

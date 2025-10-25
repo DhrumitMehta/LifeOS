@@ -327,6 +327,78 @@ class SupabaseDatabase {
     }
   }
 
+  // Individual CRUD methods for journal entries
+  addJournalEntry = async (entry: JournalEntry): Promise<void> => {
+    if (!this.useSupabase) {
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      await this.setAsyncStorageData('lifeos_journal_entries', [...existing, entry]);
+      return;
+    }
+
+    try {
+      const serializedEntry = this.serializeDates(entry);
+      const { error } = await supabase
+        .from('journal_entries')
+        .insert(serializedEntry);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error adding journal entry:', error);
+      // Fallback to AsyncStorage
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      await this.setAsyncStorageData('lifeos_journal_entries', [...existing, entry]);
+    }
+  }
+
+  updateJournalEntry = async (entry: JournalEntry): Promise<void> => {
+    if (!this.useSupabase) {
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const updated = existing.map(e => e.id === entry.id ? entry : e);
+      await this.setAsyncStorageData('lifeos_journal_entries', updated);
+      return;
+    }
+
+    try {
+      const serializedEntry = this.serializeDates(entry);
+      const { error } = await supabase
+        .from('journal_entries')
+        .update(serializedEntry)
+        .eq('id', entry.id);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error updating journal entry:', error);
+      // Fallback to AsyncStorage
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const updated = existing.map(e => e.id === entry.id ? entry : e);
+      await this.setAsyncStorageData('lifeos_journal_entries', updated);
+    }
+  }
+
+  deleteJournalEntry = async (entryId: string): Promise<void> => {
+    if (!this.useSupabase) {
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const filtered = existing.filter(entry => entry.id !== entryId);
+      await this.setAsyncStorageData('lifeos_journal_entries', filtered);
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('journal_entries')
+        .delete()
+        .eq('id', entryId);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting journal entry:', error);
+      // Fallback to AsyncStorage
+      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const filtered = existing.filter(entry => entry.id !== entryId);
+      await this.setAsyncStorageData('lifeos_journal_entries', filtered);
+    }
+  }
+
   // Transactions
   getTransactions = async (): Promise<Transaction[]> => {
     if (!this.useSupabase) {

@@ -38,7 +38,15 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   tags TEXT, -- JSON array of tags
   date DATE NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- New structured format fields
+  memorable_moment TEXT,
+  made_yesterday_better TEXT,
+  improve_today TEXT,
+  make_today_great TEXT,
+  yesterday_mood TEXT CHECK (yesterday_mood IN ('positive', 'negative')),
+  affirmations TEXT,
+  open_thoughts TEXT
 );
 
 -- Transactions table

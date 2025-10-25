@@ -36,6 +36,14 @@ export interface JournalEntry {
   date: Date;
   createdAt: Date;
   updatedAt: Date;
+  // New structured format fields
+  memorableMoment?: string;
+  madeYesterdayBetter?: string;
+  improveToday?: string;
+  makeTodayGreat?: string;
+  yesterdayMood?: 'positive' | 'negative';
+  affirmations?: string;
+  openThoughts?: string;
 }
 
 export interface Transaction {

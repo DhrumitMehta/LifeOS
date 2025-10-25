@@ -15,6 +15,7 @@ import {
   Chip,
   IconButton,
   Text,
+  Searchbar,
 } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -38,8 +39,17 @@ const JournalDetailScreen = () => {
     mood: 'neutral' as 'very-happy' | 'happy' | 'neutral' | 'sad' | 'very-sad',
     tags: [] as string[],
     date: new Date(),
+    // New structured format fields
+    memorableMoment: '',
+    madeYesterdayBetter: '',
+    improveToday: '',
+    makeTodayGreat: '',
+    yesterdayMood: 'positive' as 'positive' | 'negative',
+    affirmations: '',
+    openThoughts: '',
   });
   const [newTag, setNewTag] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     if (route.params.entryId) {
@@ -52,6 +62,13 @@ const JournalDetailScreen = () => {
           mood: foundEntry.mood,
           tags: foundEntry.tags,
           date: foundEntry.date,
+          memorableMoment: foundEntry.memorableMoment || '',
+          madeYesterdayBetter: foundEntry.madeYesterdayBetter || '',
+          improveToday: foundEntry.improveToday || '',
+          makeTodayGreat: foundEntry.makeTodayGreat || '',
+          yesterdayMood: foundEntry.yesterdayMood || 'positive',
+          affirmations: foundEntry.affirmations || '',
+          openThoughts: foundEntry.openThoughts || '',
         });
       }
     } else {
@@ -168,8 +185,34 @@ const JournalDetailScreen = () => {
     );
   }
 
+  // Highlight search terms in text
+  const highlightText = (text: string, query: string) => {
+    if (!query.trim()) return text;
+    
+    const regex = new RegExp(`(${query})`, 'gi');
+    const parts = text.split(regex);
+    
+    return parts.map((part, index) => 
+      regex.test(part) ? (
+        <Text key={index} style={styles.highlightedText}>{part}</Text>
+      ) : part
+    );
+  };
+
   return (
     <ScrollView style={styles.container}>
+      {/* Search Bar for current entry */}
+      {!isEditing && entry && (
+        <View style={styles.searchContainer}>
+          <Searchbar
+            placeholder="Search in this entry..."
+            onChangeText={setSearchQuery}
+            value={searchQuery}
+            style={styles.searchBar}
+          />
+        </View>
+      )}
+      
       {isEditing ? (
         <Card style={styles.card}>
           <Card.Content>
@@ -181,6 +224,87 @@ const JournalDetailScreen = () => {
               onChangeText={(text) => setFormData({ ...formData, title: text })}
               style={styles.input}
             />
+            
+            {/* Questions/Prompts Section */}
+            <View style={styles.section}>
+              <Title style={styles.subsectionTitle}>Questions/Prompts to Answer</Title>
+              
+              <TextInput
+                label="Memorable moment of yesterday?"
+                value={formData.memorableMoment}
+                onChangeText={(text) => setFormData({ ...formData, memorableMoment: text })}
+                multiline
+                numberOfLines={3}
+                style={styles.input}
+                placeholder="What was the most memorable moment from yesterday?"
+              />
+              
+              <TextInput
+                label="Who or what made yesterday better?"
+                value={formData.madeYesterdayBetter}
+                onChangeText={(text) => setFormData({ ...formData, madeYesterdayBetter: text })}
+                multiline
+                numberOfLines={3}
+                style={styles.input}
+                placeholder="What or who brought joy or positivity to your day?"
+              />
+              
+              <TextInput
+                label="What would I like to improve on today?"
+                value={formData.improveToday}
+                onChangeText={(text) => setFormData({ ...formData, improveToday: text })}
+                multiline
+                numberOfLines={3}
+                style={styles.input}
+                placeholder="What areas would you like to focus on improving today?"
+              />
+              
+              <TextInput
+                label="What could make today great?"
+                value={formData.makeTodayGreat}
+                onChangeText={(text) => setFormData({ ...formData, makeTodayGreat: text })}
+                multiline
+                numberOfLines={3}
+                style={styles.input}
+                placeholder="What would make today a great day for you?"
+              />
+              
+              <Text style={styles.label}>Was I more positive or negative yesterday?</Text>
+              <SegmentedButtons
+                value={formData.yesterdayMood}
+                onValueChange={(value) => setFormData({ ...formData, yesterdayMood: value as 'positive' | 'negative' })}
+                buttons={[
+                  { value: 'positive', label: 'Positive' },
+                  { value: 'negative', label: 'Negative' },
+                ]}
+                style={styles.segmentedButtons}
+              />
+            </View>
+
+            {/* Open Writing Section */}
+            <View style={styles.section}>
+              <Title style={styles.subsectionTitle}>Open Writing</Title>
+              
+              <TextInput
+                label="Affirmations for the day"
+                value={formData.affirmations}
+                onChangeText={(text) => setFormData({ ...formData, affirmations: text })}
+                multiline
+                numberOfLines={4}
+                style={styles.input}
+                placeholder="Write positive affirmations to start your day..."
+              />
+              
+              <TextInput
+                label="Any and all thoughts"
+                value={formData.openThoughts}
+                onChangeText={(text) => setFormData({ ...formData, openThoughts: text })}
+                multiline
+                numberOfLines={6}
+                style={styles.input}
+                placeholder="Write freely about anything on your mind..."
+              />
+            </View>
             
             <Text style={styles.label}>Mood</Text>
             <SegmentedButtons
@@ -194,15 +318,6 @@ const JournalDetailScreen = () => {
                 { value: 'very-sad', label: '😢' },
               ]}
               style={styles.segmentedButtons}
-            />
-            
-            <TextInput
-              label="Content *"
-              value={formData.content}
-              onChangeText={(text) => setFormData({ ...formData, content: text })}
-              multiline
-              numberOfLines={10}
-              style={styles.input}
             />
             
             <Text style={styles.label}>Tags</Text>
@@ -283,9 +398,77 @@ const JournalDetailScreen = () => {
               </View>
             </View>
 
-            <Paragraph style={styles.entryContent}>
-              {entry?.content}
-            </Paragraph>
+            {/* Questions/Prompts Display */}
+            {(entry?.memorableMoment || entry?.madeYesterdayBetter || entry?.improveToday || entry?.makeTodayGreat || entry?.yesterdayMood) && (
+              <View style={styles.section}>
+                <Title style={styles.subsectionTitle}>Questions/Prompts to Answer</Title>
+                
+                {entry?.memorableMoment && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>Memorable moment of yesterday?</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.memorableMoment, searchQuery)}</Text>
+                  </View>
+                )}
+                
+                {entry?.madeYesterdayBetter && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>Who or what made yesterday better?</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.madeYesterdayBetter, searchQuery)}</Text>
+                  </View>
+                )}
+                
+                {entry?.improveToday && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>What would I like to improve on today?</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.improveToday, searchQuery)}</Text>
+                  </View>
+                )}
+                
+                {entry?.makeTodayGreat && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>What could make today great?</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.makeTodayGreat, searchQuery)}</Text>
+                  </View>
+                )}
+                
+                {entry?.yesterdayMood && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>Was I more positive or negative yesterday?</Text>
+                    <Text style={styles.questionAnswer}>{entry.yesterdayMood === 'positive' ? 'Positive' : 'Negative'}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Open Writing Display */}
+            {(entry?.affirmations || entry?.openThoughts) && (
+              <View style={styles.section}>
+                <Title style={styles.subsectionTitle}>Open Writing</Title>
+                
+                {entry?.affirmations && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>Affirmations for the day</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.affirmations, searchQuery)}</Text>
+                  </View>
+                )}
+                
+                {entry?.openThoughts && (
+                  <View style={styles.questionItem}>
+                    <Text style={styles.questionLabel}>Any and all thoughts</Text>
+                    <Text style={styles.questionAnswer}>{highlightText(entry.openThoughts, searchQuery)}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Fallback to content if structured data is not available */}
+            {!entry?.memorableMoment && !entry?.madeYesterdayBetter && !entry?.improveToday && 
+             !entry?.makeTodayGreat && !entry?.yesterdayMood && !entry?.affirmations && 
+             !entry?.openThoughts && entry?.content && (
+              <Paragraph style={styles.entryContent}>
+                {entry.content}
+              </Paragraph>
+            )}
 
             {entry?.tags && entry.tags.length > 0 && (
               <View style={styles.tagsContainer}>
@@ -437,6 +620,44 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     marginBottom: 4,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  subsectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+    color: '#374151',
+  },
+  questionItem: {
+    marginBottom: 16,
+  },
+  questionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#374151',
+  },
+  questionAnswer: {
+    fontSize: 14,
+    color: '#4b5563',
+    lineHeight: 20,
+    backgroundColor: '#f9fafb',
+    padding: 12,
+    borderRadius: 8,
+  },
+  searchContainer: {
+    padding: 16,
+    paddingBottom: 8,
+  },
+  searchBar: {
+    elevation: 2,
+  },
+  highlightedText: {
+    backgroundColor: '#fef3c7',
+    color: '#92400e',
+    fontWeight: '600',
   },
 });
 

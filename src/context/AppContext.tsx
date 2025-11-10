@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabaseDatabase } from '../database/supabaseDatabase';
-import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Analytics } from '../types';
+import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Analytics, Subscription } from '../types';
+
+interface TransactionCategories {
+  income: string[];
+  expense: string[];
+}
 
 interface AppState {
   habits: Habit[];
@@ -10,7 +16,9 @@ interface AppState {
   investments: Investment[];
   budgets: Budget[];
   accounts: Account[];
+  subscriptions: Subscription[];
   analytics: Analytics | null;
+  categories: TransactionCategories;
   isLoading: boolean;
   error: string | null;
 }
@@ -46,7 +54,20 @@ type AppAction =
   | { type: 'ADD_ACCOUNT'; payload: Account }
   | { type: 'UPDATE_ACCOUNT'; payload: Account }
   | { type: 'DELETE_ACCOUNT'; payload: string }
-  | { type: 'SET_ANALYTICS'; payload: Analytics };
+  | { type: 'SET_SUBSCRIPTIONS'; payload: Subscription[] }
+  | { type: 'ADD_SUBSCRIPTION'; payload: Subscription }
+  | { type: 'UPDATE_SUBSCRIPTION'; payload: Subscription }
+  | { type: 'DELETE_SUBSCRIPTION'; payload: string }
+  | { type: 'SET_ANALYTICS'; payload: Analytics }
+  | { type: 'SET_CATEGORIES'; payload: TransactionCategories }
+  | { type: 'ADD_CATEGORY'; payload: { type: 'income' | 'expense'; category: string } }
+  | { type: 'UPDATE_CATEGORY'; payload: { type: 'income' | 'expense'; oldCategory: string; newCategory: string } }
+  | { type: 'DELETE_CATEGORY'; payload: { type: 'income' | 'expense'; category: string } };
+
+const defaultCategories: TransactionCategories = {
+  income: ['TCA Analyst Salary', 'Training Allowance', 'Match fees', 'Umpiring', 'Trip Allowance', 'OtherInc', 'Investment', 'Loan', 'Money Transfer', 'Other'],
+  expense: ['Food&Drink', 'Transport', 'Entertainment', 'Health', 'Technology', 'Education', 'Subscriptions', 'Utility', 'Sport', 'Family', 'Charity', 'Misc', 'Loan', 'Money Transfer', 'Investment', 'Other'],
+};
 
 const initialState: AppState = {
   habits: [],
@@ -56,7 +77,9 @@ const initialState: AppState = {
   investments: [],
   budgets: [],
   accounts: [],
+  subscriptions: [],
   analytics: null,
+  categories: defaultCategories,
   isLoading: false,
   error: null,
 };
@@ -179,8 +202,52 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         accounts: state.accounts.filter(account => account.id !== action.payload),
       };
+    case 'SET_SUBSCRIPTIONS':
+      return { ...state, subscriptions: action.payload };
+    case 'ADD_SUBSCRIPTION':
+      return { ...state, subscriptions: [...state.subscriptions, action.payload] };
+    case 'UPDATE_SUBSCRIPTION':
+      return {
+        ...state,
+        subscriptions: state.subscriptions.map(sub =>
+          sub.id === action.payload.id ? action.payload : sub
+        ),
+      };
+    case 'DELETE_SUBSCRIPTION':
+      return {
+        ...state,
+        subscriptions: state.subscriptions.filter(sub => sub.id !== action.payload),
+      };
     case 'SET_ANALYTICS':
       return { ...state, analytics: action.payload };
+    case 'SET_CATEGORIES':
+      return { ...state, categories: action.payload };
+    case 'ADD_CATEGORY':
+      return {
+        ...state,
+        categories: {
+          ...state.categories,
+          [action.payload.type]: [...state.categories[action.payload.type], action.payload.category],
+        },
+      };
+    case 'UPDATE_CATEGORY':
+      return {
+        ...state,
+        categories: {
+          ...state.categories,
+          [action.payload.type]: state.categories[action.payload.type].map(cat =>
+            cat === action.payload.oldCategory ? action.payload.newCategory : cat
+          ),
+        },
+      };
+    case 'DELETE_CATEGORY':
+      return {
+        ...state,
+        categories: {
+          ...state.categories,
+          [action.payload.type]: state.categories[action.payload.type].filter(cat => cat !== action.payload.category),
+        },
+      };
     default:
       return state;
   }
@@ -216,9 +283,14 @@ interface AppContextType {
   addAccount: (account: Omit<Account, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   updateAccount: (account: Account) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
+  // Subscription methods
+  addSubscription: (subscription: Omit<Subscription, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  updateSubscription: (subscription: Subscription) => Promise<void>;
+  deleteSubscription: (id: string) => Promise<void>;
   // Utility methods
   refreshData: () => Promise<void>;
   calculateAnalytics: () => Promise<void>;
+  processDueSubscriptions: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -242,12 +314,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       dispatch({ type: 'SET_LOADING', payload: true });
       await supabaseDatabase.init();
+      await loadCategories();
       await refreshData();
+      await processDueSubscriptions();
       await calculateAnalytics();
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Unknown error' });
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false });
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('transactionCategories');
+      if (stored) {
+        const categories = JSON.parse(stored);
+        dispatch({ type: 'SET_CATEGORIES', payload: categories });
+      } else {
+        // Use default categories
+        dispatch({ type: 'SET_CATEGORIES', payload: defaultCategories });
+        await AsyncStorage.setItem('transactionCategories', JSON.stringify(defaultCategories));
+      }
+    } catch (error) {
+      console.error('Error loading categories:', error);
+      dispatch({ type: 'SET_CATEGORIES', payload: defaultCategories });
+    }
+  };
+
+  const saveCategories = async (categories: TransactionCategories) => {
+    try {
+      await AsyncStorage.setItem('transactionCategories', JSON.stringify(categories));
+    } catch (error) {
+      console.error('Error saving categories:', error);
+      throw error;
     }
   };
 
@@ -280,9 +380,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Load accounts
       const accounts = await supabaseDatabase.getAccounts();
       dispatch({ type: 'SET_ACCOUNTS', payload: accounts });
+
+      // Load subscriptions
+      const subscriptions = await supabaseDatabase.getSubscriptions();
+      dispatch({ type: 'SET_SUBSCRIPTIONS', payload: subscriptions });
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to load data' });
     }
+  };
+
+  // Process due subscriptions and create transactions
+  const processDueSubscriptions = async () => {
+    try {
+      const today = new Date();
+      const currentDay = today.getDate();
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+
+      // Get all active subscriptions
+      const activeSubscriptions = state.subscriptions.filter(sub => sub.isActive);
+
+      for (const subscription of activeSubscriptions) {
+        // Check if subscription is due
+        const isDue = checkIfSubscriptionDue(subscription, today);
+        
+        if (isDue) {
+          // Check if we've already processed this subscription for this month
+          const lastProcessed = subscription.lastProcessedDate;
+          const shouldProcess = !lastProcessed || !isSameMonth(lastProcessed, today);
+
+          if (shouldProcess) {
+            // Create the due date (use the recurring date of current month)
+            const dueDate = new Date(currentYear, currentMonth, subscription.recurringDate);
+            
+            // Check if a transaction for this subscription already exists for this month
+            const existingTransaction = state.transactions.find(t => 
+              t.category === 'Subscriptions' &&
+              t.description.includes(subscription.name) &&
+              t.date.getMonth() === currentMonth &&
+              t.date.getFullYear() === currentYear
+            );
+
+            if (!existingTransaction) {
+              // Create expense transaction
+              const transactionData: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'> = {
+                type: 'expense',
+                category: 'Subscriptions',
+                amount: subscription.amount,
+                description: `${subscription.name} (Subscription)`,
+                date: dueDate,
+                account: subscription.account,
+                tags: ['subscription', 'auto-deducted'],
+              };
+
+              // Add transaction
+              await addTransaction(transactionData);
+
+              // Update subscription's last processed date
+              const updatedSubscription: Subscription = {
+                ...subscription,
+                lastProcessedDate: dueDate,
+                updatedAt: new Date(),
+              };
+              await updateSubscription(updatedSubscription);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error processing due subscriptions:', error);
+      // Don't throw - we don't want subscription processing to break app initialization
+    }
+  };
+
+  // Helper function to check if subscription is due
+  const checkIfSubscriptionDue = (subscription: Subscription, today: Date): boolean => {
+    const currentDay = today.getDate();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+
+    // Check if we've already processed this subscription for this month
+    const lastProcessed = subscription.lastProcessedDate;
+    if (lastProcessed) {
+      const lastProcessedMonth = lastProcessed.getMonth();
+      const lastProcessedYear = lastProcessed.getFullYear();
+      
+      // If already processed this month, it's not due
+      if (lastProcessedYear === currentYear && lastProcessedMonth === currentMonth) {
+        return false;
+      }
+    }
+
+    // If today is on or after the recurring date, it's due
+    if (currentDay >= subscription.recurringDate) {
+      return true;
+    }
+
+    // If we're in a new month and haven't processed yet, check if we should process
+    // (This handles the case where the app wasn't opened on the exact date)
+    if (lastProcessed) {
+      const lastProcessedMonth = lastProcessed.getMonth();
+      const lastProcessedYear = lastProcessed.getFullYear();
+      
+      // If last processed was in a previous month, process it now
+      if (lastProcessedYear < currentYear || 
+          (lastProcessedYear === currentYear && lastProcessedMonth < currentMonth)) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  // Helper function to check if two dates are in the same month
+  const isSameMonth = (date1: Date, date2: Date): boolean => {
+    return date1.getFullYear() === date2.getFullYear() &&
+           date1.getMonth() === date2.getMonth();
   };
 
   const calculateAnalytics = async () => {
@@ -736,6 +949,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  // Category methods
+  const addCategory = async (type: 'income' | 'expense', category: string) => {
+    if (!category.trim()) {
+      throw new Error('Category name cannot be empty');
+    }
+    if (state.categories[type].includes(category.trim())) {
+      throw new Error('Category already exists');
+    }
+    const updatedCategories = {
+      ...state.categories,
+      [type]: [...state.categories[type], category.trim()],
+    };
+    dispatch({ type: 'ADD_CATEGORY', payload: { type, category: category.trim() } });
+    await saveCategories(updatedCategories);
+  };
+
+  const updateCategory = async (type: 'income' | 'expense', oldCategory: string, newCategory: string) => {
+    if (!newCategory.trim()) {
+      throw new Error('Category name cannot be empty');
+    }
+    if (newCategory.trim() !== oldCategory && state.categories[type].includes(newCategory.trim())) {
+      throw new Error('Category already exists');
+    }
+    const updatedCategories = {
+      ...state.categories,
+      [type]: state.categories[type].map(cat =>
+        cat === oldCategory ? newCategory.trim() : cat
+      ),
+    };
+    dispatch({ type: 'UPDATE_CATEGORY', payload: { type, oldCategory, newCategory: newCategory.trim() } });
+    await saveCategories(updatedCategories);
+  };
+
+  const deleteCategory = async (type: 'income' | 'expense', category: string) => {
+    // Check if category is used in transactions
+    const isUsed = state.transactions.some(t => t.category === category);
+    if (isUsed) {
+      throw new Error('Cannot delete category that is used in transactions');
+    }
+    const updatedCategories = {
+      ...state.categories,
+      [type]: state.categories[type].filter(cat => cat !== category),
+    };
+    dispatch({ type: 'DELETE_CATEGORY', payload: { type, category } });
+    await saveCategories(updatedCategories);
+  };
+
+  // Subscription methods
+  const addSubscription = async (subscriptionData: Omit<Subscription, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const id = Date.now().toString();
+    const now = new Date();
+    const subscription: Subscription = {
+      ...subscriptionData,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await supabaseDatabase.addSubscription(subscription);
+    dispatch({ type: 'ADD_SUBSCRIPTION', payload: subscription });
+  };
+
+  const updateSubscription = async (subscription: Subscription) => {
+    const updatedSubscription = { ...subscription, updatedAt: new Date() };
+    await supabaseDatabase.updateSubscription(updatedSubscription);
+    dispatch({ type: 'UPDATE_SUBSCRIPTION', payload: updatedSubscription });
+  };
+
+  const deleteSubscription = async (id: string) => {
+    await supabaseDatabase.deleteSubscription(id);
+    dispatch({ type: 'DELETE_SUBSCRIPTION', payload: id });
+  };
+
   const contextValue: AppContextType = {
     state,
     dispatch,
@@ -760,8 +1046,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addAccount,
     updateAccount,
     deleteAccount,
+    addSubscription,
+    updateSubscription,
+    deleteSubscription,
+    addCategory,
+    updateCategory,
+    deleteCategory,
     refreshData,
     calculateAnalytics,
+    processDueSubscriptions,
   };
 
   return (

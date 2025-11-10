@@ -5,6 +5,8 @@ import {
   ScrollView,
   Alert,
   RefreshControl,
+  Modal,
+  TouchableOpacity,
 } from 'react-native';
 import {
   Card,
@@ -15,13 +17,20 @@ import {
   Divider,
   Text,
   IconButton,
+  TextInput,
+  Chip,
+  SegmentedButtons,
 } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
 const SettingsScreen = () => {
-  const { state, refreshData } = useApp();
+  const { state, refreshData, addCategory, updateCategory, deleteCategory } = useApp();
   const [refreshing, setRefreshing] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [categoryType, setCategoryType] = useState<'income' | 'expense'>('income');
+  const [editingCategory, setEditingCategory] = useState<string | null>(null);
+  const [categoryName, setCategoryName] = useState('');
 
   const handleExportData = () => {
     Alert.alert(
@@ -154,6 +163,30 @@ const SettingsScreen = () => {
               <Text style={styles.statLabel}>Budgets</Text>
             </View>
           </View>
+        </Card.Content>
+      </Card>
+
+      {/* Transaction Categories */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Title style={styles.cardTitle}>Transaction Categories</Title>
+          <Text style={styles.descriptionText}>
+            Manage your income and expense categories
+          </Text>
+          <Divider style={styles.divider} />
+          <List.Item
+            title="Manage Categories"
+            description="Add, edit, or remove transaction categories"
+            left={(props) => <List.Icon {...props} icon="folder" />}
+            right={() => (
+              <IconButton
+                icon="chevron-right"
+                size={20}
+                onPress={() => setShowCategoryModal(true)}
+              />
+            )}
+            onPress={() => setShowCategoryModal(true)}
+          />
         </Card.Content>
       </Card>
 
@@ -295,6 +328,155 @@ const SettingsScreen = () => {
       </Card>
 
       <View style={styles.bottomSpacing} />
+
+      {/* Category Management Modal */}
+      <Modal
+        visible={showCategoryModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => {
+          setShowCategoryModal(false);
+          setEditingCategory(null);
+          setCategoryName('');
+        }}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Title style={styles.modalTitle}>Manage Categories</Title>
+            <IconButton
+              icon="close"
+              size={24}
+              onPress={() => {
+                setShowCategoryModal(false);
+                setEditingCategory(null);
+                setCategoryName('');
+              }}
+            />
+          </View>
+
+          <SegmentedButtons
+            value={categoryType}
+            onValueChange={(value) => {
+              setCategoryType(value as 'income' | 'expense');
+              setEditingCategory(null);
+              setCategoryName('');
+            }}
+            buttons={[
+              { value: 'income', label: 'Income' },
+              { value: 'expense', label: 'Expense' },
+            ]}
+            style={styles.segmentedButtons}
+          />
+
+          <ScrollView style={styles.modalContent}>
+            {/* Add/Edit Category Form */}
+            <Card style={styles.formCard}>
+              <Card.Content>
+                <Text style={styles.formTitle}>
+                  {editingCategory ? 'Edit Category' : 'Add Category'}
+                </Text>
+                <TextInput
+                  label="Category Name"
+                  value={categoryName}
+                  onChangeText={setCategoryName}
+                  mode="outlined"
+                  style={styles.categoryInput}
+                  placeholder={editingCategory ? editingCategory : 'Enter category name'}
+                />
+                <View style={styles.formButtons}>
+                  {editingCategory && (
+                    <Button
+                      mode="outlined"
+                      onPress={() => {
+                        setEditingCategory(null);
+                        setCategoryName('');
+                      }}
+                      style={styles.cancelButton}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    mode="contained"
+                    onPress={async () => {
+                      try {
+                        if (editingCategory) {
+                          await updateCategory(categoryType, editingCategory, categoryName);
+                          Alert.alert('Success', 'Category updated successfully');
+                        } else {
+                          await addCategory(categoryType, categoryName);
+                          Alert.alert('Success', 'Category added successfully');
+                        }
+                        setCategoryName('');
+                        setEditingCategory(null);
+                      } catch (error) {
+                        Alert.alert('Error', error instanceof Error ? error.message : 'Failed to save category');
+                      }
+                    }}
+                    disabled={!categoryName.trim()}
+                    style={styles.saveButton}
+                  >
+                    {editingCategory ? 'Update' : 'Add'}
+                  </Button>
+                </View>
+              </Card.Content>
+            </Card>
+
+            {/* Categories List */}
+            <Card style={styles.categoriesCard}>
+              <Card.Content>
+                <Title style={styles.categoriesTitle}>
+                  {categoryType === 'income' ? 'Income' : 'Expense'} Categories
+                </Title>
+                {state.categories[categoryType].map((category) => (
+                  <View key={category} style={styles.categoryItem}>
+                    <Text style={styles.categoryText}>{category}</Text>
+                    <View style={styles.categoryActions}>
+                      <IconButton
+                        icon="pencil"
+                        size={20}
+                        onPress={() => {
+                          setEditingCategory(category);
+                          setCategoryName(category);
+                        }}
+                      />
+                      <IconButton
+                        icon="delete"
+                        size={20}
+                        iconColor="#ef4444"
+                        onPress={async () => {
+                          Alert.alert(
+                            'Delete Category',
+                            `Are you sure you want to delete "${category}"?`,
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Delete',
+                                style: 'destructive',
+                                onPress: async () => {
+                                  try {
+                                    await deleteCategory(categoryType, category);
+                                    Alert.alert('Success', 'Category deleted successfully');
+                                  } catch (error) {
+                                    Alert.alert('Error', error instanceof Error ? error.message : 'Failed to delete category');
+                                  }
+                                },
+                              },
+                            ]
+                          );
+                        }}
+                      />
+                    </View>
+                  </View>
+                ))}
+                {state.categories[categoryType].length === 0 && (
+                  <Text style={styles.emptyText}>No categories yet. Add one above!</Text>
+                )}
+              </Card.Content>
+            </Card>
+          </ScrollView>
+        </View>
+      </Modal>
     </ScrollView>
   );
 };
@@ -360,6 +542,87 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 32,
+  },
+  divider: {
+    marginVertical: 12,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#6366f1',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  segmentedButtons: {
+    margin: 16,
+    marginBottom: 8,
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
+  },
+  formCard: {
+    marginBottom: 16,
+  },
+  formTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+    color: '#374151',
+  },
+  categoryInput: {
+    marginBottom: 12,
+  },
+  formButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  cancelButton: {
+    marginRight: 8,
+  },
+  saveButton: {
+    backgroundColor: '#6366f1',
+  },
+  categoriesCard: {
+    marginBottom: 16,
+  },
+  categoriesTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  categoryItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  categoryText: {
+    fontSize: 15,
+    color: '#374151',
+    flex: 1,
+  },
+  categoryActions: {
+    flexDirection: 'row',
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: '#9ca3af',
+    fontStyle: 'italic',
+    paddingVertical: 24,
   },
 });
 

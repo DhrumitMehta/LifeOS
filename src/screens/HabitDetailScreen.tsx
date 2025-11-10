@@ -353,7 +353,7 @@ const HabitDetailScreen = () => {
                   <View key={index} style={styles.entryItem}>
                     <View style={styles.entryInfo}>
                       <Text style={styles.entryDate}>
-                        {entry.date.toLocaleDateString()}
+                        {formatDate(entry.date)}
                       </Text>
                       <Text style={styles.entryValue}>
                         {entry.value} {habit?.unit}

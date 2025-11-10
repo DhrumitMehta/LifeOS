@@ -22,6 +22,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { JournalEntry, RootStackParamList } from '../types';
+import { formatDate } from '../utils/dateFormat';
 
 type JournalDetailScreenNavigationProp = StackNavigationProp<RootStackParamList, 'JournalDetail'>;
 type JournalDetailScreenRouteProp = RouteProp<RootStackParamList, 'JournalDetail'>;
@@ -377,7 +378,7 @@ const JournalDetailScreen = () => {
               <View style={styles.entryInfo}>
                 <Title style={styles.entryTitle}>{entry?.title}</Title>
                 <Text style={styles.entryDate}>
-                  {entry?.date.toLocaleDateString()}
+                  {entry ? formatDate(entry.date) : formatDate(formData.date)}
                 </Text>
               </View>
               <View style={styles.entryActions}>

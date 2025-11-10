@@ -105,6 +105,18 @@ export interface Account {
   updatedAt: Date;
 }
 
+export interface Subscription {
+  id: string;
+  name: string;
+  amount: number;
+  recurringDate: number; // Day of month (1-31)
+  account: string; // Account name to deduct from
+  isActive: boolean;
+  lastProcessedDate?: Date; // Last date this subscription was processed
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface Analytics {
   totalIncome: number;
   totalExpenses: number;

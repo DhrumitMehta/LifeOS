@@ -1,4 +1,4 @@
--- LifeOS Supabase Database Schema
+git a-- LifeOS Supabase Database Schema
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

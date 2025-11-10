@@ -22,6 +22,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { Budget, RootStackParamList } from '../types';
+import { formatDate } from '../utils/dateFormat';
 
 type BudgetDetailScreenNavigationProp = StackNavigationProp<RootStackParamList, 'BudgetDetail'>;
 type BudgetDetailScreenRouteProp = RouteProp<RootStackParamList, 'BudgetDetail'>;
@@ -300,14 +301,14 @@ const BudgetDetailScreen = () => {
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Start Date:</Text>
                 <Text style={styles.detailValue}>
-                  {budget?.startDate.toLocaleDateString()}
+                  {budget ? formatDate(budget.startDate) : ''}
                 </Text>
               </View>
               
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>End Date:</Text>
                 <Text style={styles.detailValue}>
-                  {budget?.endDate.toLocaleDateString()}
+                  {budget ? formatDate(budget.endDate) : ''}
                 </Text>
               </View>
               

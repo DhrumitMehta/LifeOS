@@ -5,6 +5,7 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
+import { Calendar } from 'react-native-calendars';
 import {
   Card,
   Title,
@@ -21,8 +22,9 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
-import { Investment, RootStackParamList } from '../types';
-import { getFundPricesByName, FundProvider, getAvailableFunds } from '../services/mutualFundService';
+import { Investment, Transaction, RootStackParamList } from '../types';
+import { getUTTFundPrice } from '../services/mutualFundService';
+import { formatDate } from '../utils/dateFormat';
 
 type InvestmentDetailScreenNavigationProp = StackNavigationProp<RootStackParamList, 'InvestmentDetail'>;
 type InvestmentDetailScreenRouteProp = RouteProp<RootStackParamList, 'InvestmentDetail'>;
@@ -30,33 +32,63 @@ type InvestmentDetailScreenRouteProp = RouteProp<RootStackParamList, 'Investment
 const InvestmentDetailScreen = () => {
   const navigation = useNavigation<InvestmentDetailScreenNavigationProp>();
   const route = useRoute<InvestmentDetailScreenRouteProp>();
-  const { state, addInvestment, updateInvestment, deleteInvestment } = useApp();
+  const { state, addInvestment, updateInvestment, deleteInvestment, addTransaction } = useApp();
   
   const [isEditing, setIsEditing] = useState(false);
   const [investment, setInvestment] = useState<Investment | null>(null);
   const [loading, setLoading] = useState(false);
   const [unitsCalculated, setUnitsCalculated] = useState(false);
+  const [fetchingPrice, setFetchingPrice] = useState(false);
+  
+  // Get investment transactions to calculate first and latest dates
+  const getInvestmentTransactions = (inv: Investment | null) => {
+    if (!inv) return [];
+    return state.transactions
+      .filter(t => {
+        if (t.category !== 'Investment') return false;
+        if (t.description.includes(inv.name) || t.subcategory === inv.name) return true;
+        if (inv.type === 'mutual-fund' && inv.fundName) {
+          if (t.description.includes(inv.fundName) || t.subcategory === inv.fundName) return true;
+        }
+        return false;
+      })
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+  };
+  
+  const investmentTransactions = getInvestmentTransactions(investment);
+  const firstInvestmentDate = investmentTransactions.length > 0 ? investmentTransactions[0].date : investment?.purchaseDate;
+  const latestInvestmentDate = investmentTransactions.length > 0 ? investmentTransactions[investmentTransactions.length - 1].date : investment?.purchaseDate;
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
-    type: 'stock' as 'stock' | 'bond' | 'crypto' | 'mutual-fund' | 'real-estate',
-    symbol: '',
+    type: 'mutual-fund' as 'stock' | 'bond' | 'crypto' | 'mutual-fund' | 'real-estate',
     quantity: 0,
     averagePrice: 0,
     currentPrice: 0,
     purchaseDate: new Date(),
     buyingPrice: 0,
     sellingPrice: 0,
-    provider: 'UTT' as FundProvider,
     fundName: '',
     amountPurchased: 0,
+    account: 'Cash', // Account to deduct from
   });
 
+  // Only show mutual-fund for now, but keep others commented for easy re-enabling
   const investmentTypes = [
-    { value: 'stock', label: 'Individual Stock' },
     { value: 'mutual-fund', label: 'Mutual Fund' },
-    { value: 'bond', label: 'Bond' },
-    { value: 'crypto', label: 'Crypto' },
-    { value: 'real-estate', label: 'Real Estate' },
+    // { value: 'stock', label: 'Individual Stock' },
+    // { value: 'bond', label: 'Bond' },
+    // { value: 'crypto', label: 'Crypto' },
+    // { value: 'real-estate', label: 'Real Estate' },
+  ];
+
+  const accounts = ['Cash', 'NMB Main A/C', 'Selcom', 'NMB Virtual Card', 'Airtel Money', 'Inv'];
+  
+  // The 3 mutual funds available
+  const mutualFunds = [
+    { name: 'UTT Umoja Fund', fundName: 'Health Fund' },
+    { name: 'iTrust iGrowth Fund', fundName: 'Emergency Fund' },
+    { name: 'Quiver 15% Fund', fundName: 'Beach House Fund' },
   ];
 
   useEffect(() => {
@@ -67,18 +99,17 @@ const InvestmentDetailScreen = () => {
         setFormData({
           name: foundInvestment.name,
           type: foundInvestment.type,
-          symbol: foundInvestment.symbol || '',
           quantity: foundInvestment.quantity,
           averagePrice: foundInvestment.averagePrice,
           currentPrice: foundInvestment.currentPrice || 0,
           purchaseDate: foundInvestment.purchaseDate,
           buyingPrice: foundInvestment.buyingPrice || 0,
           sellingPrice: foundInvestment.sellingPrice || 0,
-          provider: (foundInvestment.provider as FundProvider) || 'UTT',
           fundName: foundInvestment.fundName || '',
           amountPurchased: foundInvestment.amountPurchased || 0,
+          account: 'Cash', // Default, will be extracted from transaction history if available
         });
-        setUnitsCalculated(foundInvestment.provider !== undefined);
+        setUnitsCalculated(foundInvestment.fundName !== undefined);
       }
     } else {
       setIsEditing(true);
@@ -91,6 +122,17 @@ const InvestmentDetailScreen = () => {
       return;
     }
 
+    // For mutual funds, require amount purchased
+    if (formData.type === 'mutual-fund' && formData.amountPurchased <= 0) {
+      Alert.alert('Error', 'Please enter the amount purchased');
+      return;
+    }
+
+    if (!formData.account) {
+      Alert.alert('Error', 'Please select an account to deduct from');
+      return;
+    }
+
     try {
       // For mutual funds with provider, calculate based on selling price
       const priceToUse = formData.type === 'mutual-fund' && formData.sellingPrice > 0
@@ -99,23 +141,78 @@ const InvestmentDetailScreen = () => {
           ? formData.currentPrice 
           : formData.averagePrice;
       
-      const totalValue = formData.quantity * priceToUse;
-
-      const investmentData = {
-        ...formData,
-        totalValue: totalValue,
-      };
+      const amountInvested = formData.type === 'mutual-fund' 
+        ? formData.amountPurchased 
+        : formData.quantity * formData.averagePrice;
 
       if (investment) {
+        // Update existing investment
         const updatedInvestment: Investment = {
           ...investment,
-          ...investmentData,
+          ...formData,
           updatedAt: new Date(),
         };
         await updateInvestment(updatedInvestment);
         setInvestment(updatedInvestment);
       } else {
-        await addInvestment(investmentData);
+        // Check if investment already exists for this fund
+        const existingInvestment = state.investments.find(
+          inv => inv.name === formData.name && inv.type === 'mutual-fund'
+        );
+
+        if (existingInvestment && formData.type === 'mutual-fund') {
+          // Add to existing investment
+          const newUnits = formData.amountPurchased / formData.buyingPrice;
+          const totalAmount = (existingInvestment.amountPurchased || 0) + formData.amountPurchased;
+          const totalUnits = existingInvestment.quantity + newUnits;
+          const newAveragePrice = totalAmount / totalUnits;
+          
+          const updatedInvestment: Investment = {
+            ...existingInvestment,
+            quantity: totalUnits,
+            averagePrice: newAveragePrice,
+            amountPurchased: totalAmount,
+            sellingPrice: formData.sellingPrice || existingInvestment.sellingPrice,
+            updatedAt: new Date(),
+          };
+          
+          await updateInvestment(updatedInvestment);
+        } else {
+          // Create new investment
+          const totalValue = formData.quantity * priceToUse;
+          const investmentData = {
+            ...formData,
+            totalValue: totalValue,
+          };
+          await addInvestment(investmentData);
+        }
+        
+        // Create expense transaction from the selected account
+        const expenseTransaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'> = {
+          type: 'expense',
+          category: 'Investment',
+          subcategory: formData.type === 'mutual-fund' ? formData.fundName || formData.name : formData.name,
+          amount: amountInvested,
+          description: `Investment: ${formData.name}${formData.type === 'mutual-fund' && formData.fundName ? ` (${formData.fundName})` : ''}`,
+          date: formData.purchaseDate,
+          account: formData.account,
+          tags: ['investment', formData.type],
+        };
+        
+        // Create income transaction to the investment account
+        const incomeTransaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'> = {
+          type: 'income',
+          category: 'Investment',
+          subcategory: formData.type === 'mutual-fund' ? formData.fundName || formData.name : formData.name,
+          amount: amountInvested,
+          description: `Investment: ${formData.name}${formData.type === 'mutual-fund' && formData.fundName ? ` (${formData.fundName})` : ''}`,
+          date: formData.purchaseDate,
+          account: 'Inv',
+          tags: ['investment', formData.type],
+        };
+        
+        await addTransaction(expenseTransaction);
+        await addTransaction(incomeTransaction);
         navigation.goBack();
       }
       setIsEditing(false);
@@ -133,41 +230,35 @@ const InvestmentDetailScreen = () => {
     }
   };
 
-  const handleFetchPrices = async () => {
-    if (!formData.fundName || formData.type !== 'mutual-fund') {
-      Alert.alert('Error', 'Please select a fund first');
+  const handleFetchCurrentPrice = async () => {
+    if (!investment || investment.type !== 'mutual-fund') {
+      Alert.alert('Error', 'This feature is only available for mutual funds');
       return;
     }
 
-    setLoading(true);
+    setFetchingPrice(true);
     try {
-      const prices = await getFundPricesByName(formData.fundName, formData.provider);
-      if (prices) {
-        const updatedFormData = {
-          ...formData,
-          buyingPrice: prices.buyingPrice,
-          sellingPrice: prices.sellingPrice,
-          // Set the investment name to the fund name
-          name: formData.fundName,
+      const currentPrice = await getUTTFundPrice(investment.name);
+      if (currentPrice !== null && !isNaN(currentPrice) && currentPrice > 0) {
+        // Update the investment with the new selling price and recalculate total value
+        const updatedInvestment: Investment = {
+          ...investment,
+          sellingPrice: currentPrice,
+          totalValue: investment.quantity * currentPrice,
+          updatedAt: new Date(),
         };
-        setFormData(updatedFormData);
-        
-        // Auto-calculate units if amount purchased is set
-        if (formData.amountPurchased > 0 && prices.buyingPrice > 0) {
-          const units = formData.amountPurchased / prices.buyingPrice;
-          updatedFormData.quantity = units;
-          updatedFormData.averagePrice = prices.buyingPrice;
-          setFormData(updatedFormData);
-          setUnitsCalculated(true);
-        }
-        Alert.alert('Success', 'Prices fetched and units calculated!');
+        await updateInvestment(updatedInvestment);
+        setInvestment(updatedInvestment);
+        Alert.alert('Success', `Current unit selling price updated: ${currentPrice.toFixed(4)} TZS\nTotal value updated: ${formatCurrency(updatedInvestment.totalValue || 0)}`);
       } else {
-        Alert.alert('Error', 'Could not fetch prices for this fund. Please check the fund name or provider.');
+        console.error('Invalid price returned:', currentPrice);
+        Alert.alert('Error', 'Could not fetch current price for this fund. Please check the fund name or try again later.');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to fetch prices. Please try again.');
+      console.error('Error fetching price:', error);
+      Alert.alert('Error', 'Failed to fetch current price. Please try again.');
     } finally {
-      setLoading(false);
+      setFetchingPrice(false);
     }
   };
 
@@ -257,44 +348,43 @@ const InvestmentDetailScreen = () => {
               ))}
             </View>
             
-            <TextInput
-              label="Symbol"
-              value={formData.symbol}
-              onChangeText={(text) => setFormData({ ...formData, symbol: text })}
-              style={styles.input}
-            />
+            <Text style={styles.label}>Account *</Text>
+            <View style={styles.categoriesContainer}>
+              {accounts.map((account) => (
+                <Chip
+                  key={account}
+                  selected={formData.account === account}
+                  onPress={() => setFormData({ ...formData, account })}
+                  style={styles.categoryChip}
+                >
+                  {account}
+                </Chip>
+              ))}
+            </View>
             
             {formData.type === 'mutual-fund' ? (
               <>
-                <Text style={styles.label}>Provider *</Text>
-                <SegmentedButtons
-                  value={formData.provider}
-                  onValueChange={(value) => setFormData({ ...formData, provider: value as FundProvider, fundName: '' })}
-                  buttons={[
-                    { value: 'UTT', label: 'UTT' },
-                    { value: 'Itrust', label: 'Itrust' },
-                    { value: 'Quiver', label: 'Quiver' },
-                  ]}
-                  style={styles.segmentedButtons}
-                />
-                
                 <Text style={styles.label}>Select Fund *</Text>
                 <View style={styles.pickerContainer}>
-                  {getAvailableFunds(formData.provider).map((fund) => (
+                  {mutualFunds.map((fund) => (
                     <Button
-                      key={fund.value}
-                      mode={formData.fundName === fund.value ? 'contained' : 'outlined'}
-                      onPress={() => setFormData({ ...formData, fundName: fund.value })}
+                      key={fund.name}
+                      mode={formData.name === fund.name ? 'contained' : 'outlined'}
+                      onPress={() => setFormData({ 
+                        ...formData, 
+                        name: fund.name,
+                        fundName: fund.fundName 
+                      })}
                       style={styles.fundButton}
                     >
-                      {fund.label}
+                      {fund.name}
                     </Button>
                   ))}
                 </View>
                 
-                {formData.fundName && (
+                {formData.name && (
                   <Paragraph style={styles.selectedFund}>
-                    Selected: <Text style={styles.selectedFundName}>{formData.fundName}</Text>
+                    Selected: <Text style={styles.selectedFundName}>{formData.name} ({formData.fundName})</Text>
                   </Paragraph>
                 )}
                 
@@ -306,39 +396,36 @@ const InvestmentDetailScreen = () => {
                   style={styles.input}
                 />
                 
-                <Button
-                  mode="contained"
-                  onPress={handleFetchPrices}
-                  loading={loading}
-                  disabled={loading}
-                  style={styles.fetchButton}
-                  icon="download"
-                >
-                  {loading ? 'Fetching Prices...' : 'Fetch Current Prices'}
-                </Button>
+                <TextInput
+                  label="Buying Price (Unit Price) *"
+                  value={formData.buyingPrice.toString()}
+                  onChangeText={(text) => setFormData({ ...formData, buyingPrice: parseFloat(text) || 0 })}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
                 
-                {formData.buyingPrice > 0 && (
-                  <View style={styles.pricesContainer}>
-                    <Text style={styles.sectionTitle}>Current Prices</Text>
-                    <View style={styles.row}>
-                      <View style={styles.priceBox}>
-                        <Text style={styles.priceLabel}>Buying Price</Text>
-                        <Text style={styles.priceValue}>{formatCurrency(formData.buyingPrice)}</Text>
-                      </View>
-                      <View style={styles.priceBox}>
-                        <Text style={styles.priceLabel}>Selling Price</Text>
-                        <Text style={styles.priceValue}>{formatCurrency(formData.sellingPrice)}</Text>
-                      </View>
-                    </View>
-                    
-                    {formData.amountPurchased > 0 && formData.buyingPrice > 0 && (
-                      <View style={styles.calculatedInfo}>
-                        <Text style={styles.calculatedLabel}>Units Purchased:</Text>
-                        <Text style={styles.calculatedValue}>
-                          {(formData.amountPurchased / formData.buyingPrice).toFixed(4)}
-                        </Text>
-                      </View>
-                    )}
+                <TextInput
+                  label="Current Unit Selling Price"
+                  value={formData.sellingPrice.toString()}
+                  onChangeText={(text) => setFormData({ ...formData, sellingPrice: parseFloat(text) || 0 })}
+                  keyboardType="numeric"
+                  style={styles.input}
+                />
+                
+                {formData.amountPurchased > 0 && formData.buyingPrice > 0 && (
+                  <Button
+                    mode="outlined"
+                    onPress={calculateUnits}
+                    style={styles.calculateButton}
+                  >
+                    Calculate Units
+                  </Button>
+                )}
+                
+                {unitsCalculated && (
+                  <View style={styles.unitsContainer}>
+                    <Text style={styles.unitsLabel}>Calculated Units:</Text>
+                    <Text style={styles.unitsValue}>{formData.quantity.toFixed(4)}</Text>
                   </View>
                 )}
               </>
@@ -371,6 +458,23 @@ const InvestmentDetailScreen = () => {
               />
             )}
             
+            <Text style={styles.label}>Purchase Date</Text>
+            <View style={styles.dateContainer}>
+              <TextInput
+                label="Date"
+                value={formData.purchaseDate.toISOString().split('T')[0]}
+                editable={false}
+                style={[styles.input, { flex: 1 }]}
+              />
+              <Button
+                mode="outlined"
+                onPress={() => setShowDatePicker(true)}
+                style={styles.dateButton}
+              >
+                Change
+              </Button>
+            </View>
+            
             <View style={styles.buttonRow}>
               <Button
                 mode="outlined"
@@ -395,9 +499,6 @@ const InvestmentDetailScreen = () => {
             <View style={styles.investmentHeader}>
               <View style={styles.investmentInfo}>
                 <Title style={styles.investmentName}>{investment?.name}</Title>
-                <Text style={styles.investmentSymbol}>
-                  {investment?.symbol && `(${investment.symbol})`}
-                </Text>
               </View>
               <View style={styles.investmentActions}>
                 <IconButton
@@ -427,7 +528,11 @@ const InvestmentDetailScreen = () => {
               
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>Quantity:</Text>
-                <Text style={styles.detailValue}>{investment?.quantity} shares</Text>
+                <Text style={styles.detailValue}>
+                  {investment?.type === 'mutual-fund' 
+                    ? `${investment?.quantity.toFixed(4)} units` 
+                    : `${investment?.quantity} shares`}
+                </Text>
               </View>
               
               <View style={styles.detailRow}>
@@ -435,7 +540,7 @@ const InvestmentDetailScreen = () => {
                 <Text style={styles.detailValue}>{formatCurrency(investment?.averagePrice || 0)}</Text>
               </View>
               
-              {investment?.type === 'mutual-fund' && (investment?.buyingPrice || investment?.sellingPrice) ? (
+              {investment?.type === 'mutual-fund' ? (
                 <>
                   {investment?.buyingPrice && (
                     <View style={styles.detailRow}>
@@ -443,12 +548,25 @@ const InvestmentDetailScreen = () => {
                       <Text style={styles.detailValue}>{formatCurrency(investment.buyingPrice)}</Text>
                     </View>
                   )}
-                  {investment?.sellingPrice && (
-                    <View style={styles.detailRow}>
-                      <Text style={styles.detailLabel}>Selling Price:</Text>
-                      <Text style={styles.detailValue}>{formatCurrency(investment.sellingPrice)}</Text>
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Selling Price:</Text>
+                    <View style={styles.detailValueContainer}>
+                      <Text style={styles.detailValue}>
+                        {investment?.sellingPrice ? formatCurrency(investment.sellingPrice) : 'Not set'}
+                      </Text>
+                      <Button
+                        mode="outlined"
+                        compact
+                        onPress={handleFetchCurrentPrice}
+                        loading={fetchingPrice}
+                        disabled={fetchingPrice}
+                        style={styles.fetchPriceButton}
+                        icon="refresh"
+                      >
+                        {investment?.sellingPrice ? 'Update' : 'Fetch'}
+                      </Button>
                     </View>
-                  )}
+                  </View>
                   <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Current Value:</Text>
                     <Text style={[styles.detailValue, styles.totalValue]}>
@@ -495,9 +613,16 @@ const InvestmentDetailScreen = () => {
               </View>
               
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Purchase Date:</Text>
+                <Text style={styles.detailLabel}>First Investment:</Text>
                 <Text style={styles.detailValue}>
-                  {investment?.purchaseDate.toLocaleDateString()}
+                  {firstInvestmentDate ? formatDate(firstInvestmentDate) : 'N/A'}
+                </Text>
+              </View>
+              
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Latest Investment:</Text>
+                <Text style={styles.detailValue}>
+                  {latestInvestmentDate ? formatDate(latestInvestmentDate) : 'N/A'}
                 </Text>
               </View>
             </View>
@@ -514,6 +639,38 @@ const InvestmentDetailScreen = () => {
             </View>
           </Card.Content>
         </Card>
+      )}
+
+      {showDatePicker && (
+        <View style={styles.datePickerContainer}>
+          <Card style={styles.datePickerCard}>
+            <Card.Content>
+              <Calendar
+                current={formData.purchaseDate.toISOString().split('T')[0]}
+                onDayPress={(day) => {
+                  const selectedDate = new Date(day.dateString);
+                  setFormData({ ...formData, purchaseDate: selectedDate });
+                  setShowDatePicker(false);
+                }}
+                markedDates={{
+                  [formData.purchaseDate.toISOString().split('T')[0]]: { selected: true, selectedColor: '#6366f1' }
+                }}
+                theme={{
+                  selectedDayBackgroundColor: '#6366f1',
+                  todayTextColor: '#6366f1',
+                  arrowColor: '#6366f1',
+                }}
+              />
+              <Button
+                mode="outlined"
+                onPress={() => setShowDatePicker(false)}
+                style={styles.closeDatePickerButton}
+              >
+                Close
+              </Button>
+            </Card.Content>
+          </Card>
+        </View>
       )}
     </ScrollView>
   );
@@ -696,6 +853,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#374151',
   },
+  categoriesContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  categoryChip: {
+    marginBottom: 8,
+  },
   metadata: {
     marginTop: 16,
     paddingTop: 16,
@@ -706,6 +872,60 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9ca3af',
     marginBottom: 4,
+  },
+  dateContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+    alignItems: 'flex-end',
+  },
+  dateButton: {
+    marginBottom: 16,
+  },
+  datePickerContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  datePickerCard: {
+    margin: 16,
+    maxWidth: '90%',
+  },
+  closeDatePickerButton: {
+    marginTop: 16,
+  },
+  calculateButton: {
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  fetchPriceButton: {
+    marginLeft: 8,
+  },
+  detailValueContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  unitsContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#f0f9ff',
+    borderRadius: 8,
+  },
+  unitsLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 4,
+  },
+  unitsValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0369a1',
   },
 });
 

@@ -23,6 +23,7 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { Transaction, RootStackParamList } from '../types';
+import { formatDate } from '../utils/dateFormat';
 
 type TransactionDetailScreenNavigationProp = StackNavigationProp<RootStackParamList, 'TransactionDetail'>;
 type TransactionDetailScreenRouteProp = RouteProp<RootStackParamList, 'TransactionDetail'>;
@@ -44,15 +45,15 @@ const TransactionDetailScreen = () => {
     account: 'Cash', // Default to Cash to match imported data
     tags: [] as string[],
   });
+  const [fromAccount, setFromAccount] = useState('');
+  const [toAccount, setToAccount] = useState('');
   const [newTag, setNewTag] = useState('');
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [amountWhole, setAmountWhole] = useState('0');
   const [amountDecimal, setAmountDecimal] = useState('00');
 
-  const categories = {
-    income: ['TCA Analyst Salary', 'Training Allowance', 'Match fees', 'Umpiring', 'Trip Allowance', 'OtherInc', 'Investment', 'Loan', 'Money Transfer', 'Other'],
-    expense: ['Food&Drink', 'Transport', 'Entertainment', 'Health', 'Technology', 'Education', 'Subscriptions', 'Utility', 'Sport', 'Family', 'Charity', 'Misc', 'Loan', 'Money Transfer', 'Investment', 'Other'],
-  };
+  // Use dynamic categories from context
+  const categories = state.categories;
 
   const accounts = ['Cash', 'NMB Main A/C', 'Selcom', 'NMB Virtual Card', 'Airtel Money', 'Inv'];
 
@@ -67,6 +68,14 @@ const TransactionDetailScreen = () => {
       }));
     }
   }, [formData.date, isEditing, transaction]);
+
+  // Reset transfer accounts when category changes
+  useEffect(() => {
+    if (formData.category !== 'Money Transfer') {
+      setFromAccount('');
+      setToAccount('');
+    }
+  }, [formData.category]);
 
   useEffect(() => {
     if (route.params.transactionId) {
@@ -83,6 +92,10 @@ const TransactionDetailScreen = () => {
           account: foundTransaction.account || '',
           tags: foundTransaction.tags,
         });
+        
+        // Reset transfer accounts when editing existing transaction
+        setFromAccount('');
+        setToAccount('');
         
         // Split amount into whole and decimal parts
         const amountStr = foundTransaction.amount.toString();
@@ -102,6 +115,18 @@ const TransactionDetailScreen = () => {
     if (!formData.category.trim() || !formData.description.trim() || combinedAmount <= 0) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
+    }
+
+    // For Money Transfer, validate from and to accounts
+    if (formData.category === 'Money Transfer') {
+      if (!fromAccount || !toAccount) {
+        Alert.alert('Error', 'Please select both From Account and To Account for money transfers');
+        return;
+      }
+      if (fromAccount === toAccount) {
+        Alert.alert('Error', 'From Account and To Account must be different');
+        return;
+      }
     }
 
     // Set default account to Cash if not specified
@@ -124,7 +149,38 @@ const TransactionDetailScreen = () => {
         await updateTransaction(updatedTransaction);
         setTransaction(updatedTransaction);
       } else {
-        await addTransaction(dataToSave);
+        // For Money Transfer, create two transactions
+        if (formData.category === 'Money Transfer' && fromAccount && toAccount) {
+          // Create expense transaction from source account
+          const expenseTransaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'> = {
+            type: 'expense',
+            category: 'Money Transfer',
+            subcategory: formData.subcategory,
+            amount: combinedAmount,
+            description: `Transfer to ${toAccount}: ${formData.description}`,
+            date: formData.date,
+            account: fromAccount,
+            tags: formData.tags,
+          };
+          
+          // Create income transaction to destination account
+          const incomeTransaction: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'> = {
+            type: 'income',
+            category: 'Money Transfer',
+            subcategory: formData.subcategory,
+            amount: combinedAmount,
+            description: `Transfer from ${fromAccount}: ${formData.description}`,
+            date: formData.date,
+            account: toAccount,
+            tags: formData.tags,
+          };
+          
+          // Add both transactions
+          await addTransaction(expenseTransaction);
+          await addTransaction(incomeTransaction);
+        } else {
+          await addTransaction(dataToSave);
+        }
         navigation.goBack();
       }
       setIsEditing(false);
@@ -281,19 +337,53 @@ const TransactionDetailScreen = () => {
               </Button>
             </View>
             
-            <Text style={styles.label}>Account</Text>
-            <View style={styles.categoriesContainer}>
-              {accounts.map((account) => (
-                <Chip
-                  key={account}
-                  selected={formData.account === account}
-                  onPress={() => setFormData({ ...formData, account })}
-                  style={styles.categoryChip}
-                >
-                  {account}
-                </Chip>
-              ))}
-            </View>
+            {formData.category === 'Money Transfer' ? (
+              <>
+                <Text style={styles.label}>From Account *</Text>
+                <View style={styles.categoriesContainer}>
+                  {accounts.map((account) => (
+                    <Chip
+                      key={account}
+                      selected={fromAccount === account}
+                      onPress={() => setFromAccount(account)}
+                      style={styles.categoryChip}
+                    >
+                      {account}
+                    </Chip>
+                  ))}
+                </View>
+                
+                <Text style={styles.label}>To Account *</Text>
+                <View style={styles.categoriesContainer}>
+                  {accounts.map((account) => (
+                    <Chip
+                      key={account}
+                      selected={toAccount === account}
+                      onPress={() => setToAccount(account)}
+                      style={styles.categoryChip}
+                    >
+                      {account}
+                    </Chip>
+                  ))}
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>Account</Text>
+                <View style={styles.categoriesContainer}>
+                  {accounts.map((account) => (
+                    <Chip
+                      key={account}
+                      selected={formData.account === account}
+                      onPress={() => setFormData({ ...formData, account })}
+                      style={styles.categoryChip}
+                    >
+                      {account}
+                    </Chip>
+                  ))}
+                </View>
+              </>
+            )}
             
             <Text style={styles.label}>Tags</Text>
             <View style={styles.tagInputContainer}>
@@ -352,7 +442,7 @@ const TransactionDetailScreen = () => {
               <View style={styles.transactionInfo}>
                 <Title style={styles.transactionTitle}>{transaction?.description}</Title>
                 <Text style={styles.transactionDate}>
-                  {transaction?.date.toLocaleDateString()}
+                  {transaction ? formatDate(transaction.date) : formatDate(formData.date)}
                 </Text>
               </View>
               <View style={styles.transactionActions}>

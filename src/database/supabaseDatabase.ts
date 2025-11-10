@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account } from '../types';
+import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 class SupabaseDatabase {
@@ -597,6 +597,125 @@ class SupabaseDatabase {
       return this.setAsyncStorageData('lifeos_accounts', accounts);
     }
   }
+
+  // Subscriptions
+  getSubscriptions = async (): Promise<Subscription[]> => {
+    if (!this.useSupabase) {
+      return this.getAsyncStorageData<Subscription>('lifeos_subscriptions');
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .order('recurring_date', { ascending: true });
+
+      if (error) throw error;
+      return data?.map(sub => this.deserializeDates(sub)) || [];
+    } catch (error) {
+      console.error('Error getting subscriptions:', error);
+      return this.getAsyncStorageData<Subscription>('lifeos_subscriptions');
+    }
+  };
+
+  saveSubscriptions = async (subscriptions: Subscription[]): Promise<void> => {
+    if (!this.useSupabase) {
+      return this.setAsyncStorageData('lifeos_subscriptions', subscriptions);
+    }
+
+    try {
+      const serializedSubscriptions = subscriptions.map(sub => this.serializeDates(sub));
+      
+      // First, clear existing subscriptions
+      await supabase.from('subscriptions').delete().neq('id', '');
+      
+      // Then insert all subscriptions
+      if (serializedSubscriptions.length > 0) {
+        const { error } = await supabase
+          .from('subscriptions')
+          .insert(serializedSubscriptions);
+        
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error('Error saving subscriptions:', error);
+      return this.setAsyncStorageData('lifeos_subscriptions', subscriptions);
+    }
+  };
+
+  addSubscription = async (subscription: Subscription): Promise<void> => {
+    if (!this.useSupabase) {
+      const subscriptions = await this.getSubscriptions();
+      subscriptions.push(subscription);
+      return this.saveSubscriptions(subscriptions);
+    }
+
+    try {
+      const serialized = this.serializeDates(subscription);
+      const { error } = await supabase
+        .from('subscriptions')
+        .insert(serialized);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error adding subscription:', error);
+      const subscriptions = await this.getSubscriptions();
+      subscriptions.push(subscription);
+      return this.saveSubscriptions(subscriptions);
+    }
+  };
+
+  updateSubscription = async (subscription: Subscription): Promise<void> => {
+    if (!this.useSupabase) {
+      const subscriptions = await this.getSubscriptions();
+      const index = subscriptions.findIndex(s => s.id === subscription.id);
+      if (index !== -1) {
+        subscriptions[index] = subscription;
+        return this.saveSubscriptions(subscriptions);
+      }
+      return;
+    }
+
+    try {
+      const serialized = this.serializeDates(subscription);
+      const { error } = await supabase
+        .from('subscriptions')
+        .update(serialized)
+        .eq('id', subscription.id);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error updating subscription:', error);
+      const subscriptions = await this.getSubscriptions();
+      const index = subscriptions.findIndex(s => s.id === subscription.id);
+      if (index !== -1) {
+        subscriptions[index] = subscription;
+        return this.saveSubscriptions(subscriptions);
+      }
+    }
+  };
+
+  deleteSubscription = async (id: string): Promise<void> => {
+    if (!this.useSupabase) {
+      const subscriptions = await this.getSubscriptions();
+      const filtered = subscriptions.filter(s => s.id !== id);
+      return this.saveSubscriptions(filtered);
+    }
+
+    try {
+      const { error } = await supabase
+        .from('subscriptions')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting subscription:', error);
+      const subscriptions = await this.getSubscriptions();
+      const filtered = subscriptions.filter(s => s.id !== id);
+      return this.saveSubscriptions(filtered);
+    }
+  };
 
   async close(): Promise<void> {
     // Supabase doesn't need explicit closing

@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import {
   Card,
@@ -144,6 +146,14 @@ const HeaderViewToggle = ({ viewMode, onViewModeChange }: {
   );
 };
 
+// Helper function to format date as dd/mm/yyyy
+const formatDate = (date: Date): string => {
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
 const JournalScreen = () => {
   const navigation = useNavigation<JournalScreenNavigationProp>();
   const { state, addJournalEntry, refreshData } = useApp();
@@ -178,7 +188,7 @@ const JournalScreen = () => {
   
   // Form data for the structured journal entry
   const [formData, setFormData] = useState({
-    title: `Journal Entry - ${new Date().toLocaleDateString()}`,
+    title: `Journal Entry - ${formatDate(new Date())}`,
     memorableMoment: '',
     madeYesterdayBetter: '',
     improveToday: '',
@@ -231,7 +241,7 @@ const JournalScreen = () => {
       
       // Reset form
       setFormData({
-        title: `Journal Entry - ${new Date().toLocaleDateString()}`,
+        title: `Journal Entry - ${formatDate(new Date())}`,
         memorableMoment: '',
         madeYesterdayBetter: '',
         improveToday: '',
@@ -479,12 +489,19 @@ const JournalScreen = () => {
   }
 
   return (
-    <ScrollView 
+    <KeyboardAvoidingView 
       style={styles.container}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
     >
+      <ScrollView 
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+        keyboardShouldPersistTaps="handled"
+      >
 
       {/* Search Bar - Only show in list view */}
       {viewMode === 'list' && (
@@ -694,8 +711,25 @@ const JournalScreen = () => {
         <Card style={styles.editingCard}>
           <Card.Content>
             <Title style={styles.sectionTitle}>Daily Journal</Title>
-            <Text style={styles.dateText}>{new Date().toLocaleDateString()}</Text>
+            <Text style={styles.dateText}>{formatDate(new Date())}</Text>
             
+            {/* Mood Selector */}
+            <View style={styles.section}>
+              <Text style={styles.label}>How are you feeling today?</Text>
+              <SegmentedButtons
+                value={formData.mood}
+                onValueChange={(value) => setFormData({ ...formData, mood: value as 'very-happy' | 'happy' | 'neutral' | 'sad' | 'very-sad' })}
+                buttons={[
+                  { value: 'very-happy', label: '😄' },
+                  { value: 'happy', label: '😊' },
+                  { value: 'neutral', label: '😐' },
+                  { value: 'sad', label: '😔' },
+                  { value: 'very-sad', label: '😢' },
+                ]}
+                style={styles.segmentedButtons}
+              />
+            </View>
+
             {/* Questions/Prompts Section */}
             <View style={styles.section}>
               <Title style={styles.subsectionTitle}>Questions/Prompts to Answer</Title>
@@ -856,7 +890,7 @@ const JournalScreen = () => {
                         <View style={styles.entryInfo}>
                           <Title style={styles.entryTitle}>{entry.title}</Title>
                           <Text style={styles.entryDate}>
-                            {entry.date.toLocaleDateString()}
+                            {formatDate(entry.date)}
                           </Text>
                         </View>
                         <View style={[styles.moodIndicator, { backgroundColor: getMoodColor(entry.mood) + '20' }]}>
@@ -967,10 +1001,7 @@ const JournalScreen = () => {
                   >
                     <View style={styles.gridDateCell}>
                       <Text style={styles.gridDateText}>
-                        {entry.date.toLocaleDateString('en-US', { 
-                          month: 'short', 
-                          day: 'numeric' 
-                        })}
+                        {formatDate(entry.date)}
                       </Text>
                       <Text style={styles.gridWeekdayText}>
                         {entry.date.toLocaleDateString('en-US', { weekday: 'short' })}
@@ -1005,7 +1036,8 @@ const JournalScreen = () => {
           )}
         </View>
       )}
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -1013,6 +1045,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 100, // Extra padding at bottom to ensure last fields are visible above keyboard
   },
   loadingContainer: {
     flex: 1,

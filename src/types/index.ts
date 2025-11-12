@@ -141,7 +141,7 @@ export interface Analytics {
 }
 
 export type RootStackParamList = {
-  Main: undefined;
+  Main: { screen?: string } | undefined;
   HabitDetail: { habitId: string };
   JournalDetail: { entryId?: string };
   TransactionDetail: { transactionId?: string };
@@ -152,6 +152,7 @@ export type RootStackParamList = {
 };
 
 export type TabParamList = {
+  Home: undefined;
   Habits: undefined;
   Journal: undefined;
   Finance: undefined;

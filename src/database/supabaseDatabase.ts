@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase';
 import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { offlineSync } from '../services/offlineSync';
 
 class SupabaseDatabase {
   private useSupabase: boolean = true;
@@ -197,6 +198,9 @@ class SupabaseDatabase {
       // Fallback to AsyncStorage
       const existing = await this.getAsyncStorageData<Habit>('lifeos_habits');
       await this.setAsyncStorageData('lifeos_habits', [...existing, habit]);
+      
+      // Queue for sync when online
+      await offlineSync.queueOperation('create', 'habits', habit);
     }
   }
 
@@ -216,9 +220,12 @@ class SupabaseDatabase {
       if (error) throw error;
     } catch (error) {
       console.error('Error adding habit entry:', error);
-      // Fallback to AsyncStorage
+      // Save to AsyncStorage as fallback
       const existing = await this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
       await this.setAsyncStorageData('lifeos_habit_entries', [...existing, entry]);
+      
+      // Queue for sync when online
+      await offlineSync.queueOperation('create', 'habit_entries', entry);
     }
   }
 
@@ -344,9 +351,12 @@ class SupabaseDatabase {
       if (error) throw error;
     } catch (error) {
       console.error('Error adding journal entry:', error);
-      // Fallback to AsyncStorage
+      // Save to AsyncStorage as fallback
       const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
       await this.setAsyncStorageData('lifeos_journal_entries', [...existing, entry]);
+      
+      // Queue for sync when online
+      await offlineSync.queueOperation('create', 'journal_entries', entry);
     }
   }
 
@@ -459,7 +469,9 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving transactions:', error);
-      return this.setAsyncStorageData('lifeos_transactions', transactions);
+      // Fallback to AsyncStorage
+      await this.setAsyncStorageData('lifeos_transactions', transactions);
+      // The AsyncStorage sync will handle syncing these when online
     }
   }
 

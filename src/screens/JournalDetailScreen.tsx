@@ -22,10 +22,27 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { JournalEntry, RootStackParamList } from '../types';
-import { formatDate } from '../utils/dateFormat';
 
 type JournalDetailScreenNavigationProp = StackNavigationProp<RootStackParamList, 'JournalDetail'>;
 type JournalDetailScreenRouteProp = RouteProp<RootStackParamList, 'JournalDetail'>;
+
+// Helper function to format date as dd/mm/yyyy
+const formatDate = (date: Date): string => {
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
+// Helper function to format date and time as dd/mm/yyyy HH:mm
+const formatDateTime = (date: Date): string => {
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = date.getHours().toString().padStart(2, '0');
+  const minutes = date.getMinutes().toString().padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+};
 
 const JournalDetailScreen = () => {
   const navigation = useNavigation<JournalDetailScreenNavigationProp>();
@@ -490,11 +507,11 @@ const JournalDetailScreen = () => {
 
             <View style={styles.metadata}>
               <Text style={styles.metadataText}>
-                Created: {entry?.createdAt.toLocaleString()}
+                Created: {entry?.createdAt ? formatDateTime(entry.createdAt) : ''}
               </Text>
               {entry?.updatedAt && entry.updatedAt.getTime() !== entry.createdAt.getTime() && (
                 <Text style={styles.metadataText}>
-                  Updated: {entry.updatedAt.toLocaleString()}
+                  Updated: {formatDateTime(entry.updatedAt)}
                 </Text>
               )}
             </View>

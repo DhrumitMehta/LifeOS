@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabaseDatabase } from '../database/supabaseDatabase';
 import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Analytics, Subscription } from '../types';
+import { scheduleDailyNotifications } from '../services/notifications';
 
 interface TransactionCategories {
   income: string[];
@@ -314,10 +315,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       dispatch({ type: 'SET_LOADING', payload: true });
       await supabaseDatabase.init();
+      
+      // Initialize offline sync service
+      const { offlineSync } = await import('../services/offlineSync');
+      await offlineSync.init();
+      
       await loadCategories();
       await refreshData();
       await processDueSubscriptions();
       await calculateAnalytics();
+      
+      // Schedule daily notifications after data is loaded
+      // Note: This will be called again in refreshData, but it's safe to call multiple times
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Unknown error' });
     } finally {
@@ -384,6 +393,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Load subscriptions
       const subscriptions = await supabaseDatabase.getSubscriptions();
       dispatch({ type: 'SET_SUBSCRIPTIONS', payload: subscriptions });
+      
+      // Reschedule notifications with updated habits
+      await scheduleDailyNotifications(habits);
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to load data' });
     }
@@ -666,6 +678,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Update local state
       dispatch({ type: 'ADD_HABIT', payload: habit });
       
+      // Reschedule notifications with updated habits
+      const updatedHabits = [...state.habits, habit];
+      await scheduleDailyNotifications(updatedHabits);
+      
       console.log('Context: Habit added successfully');
       return habit;
     } catch (error) {
@@ -682,6 +698,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { type: 'UPDATE_HABIT', payload: updatedHabit },
       (habits) => habits.map(h => h.id === habit.id ? updatedHabit : h)
     );
+    
+    // Reschedule notifications with updated habits
+    const updatedHabits = state.habits.map(h => h.id === habit.id ? updatedHabit : h);
+    await scheduleDailyNotifications(updatedHabits);
   };
 
   const deleteHabit = async (id: string) => {
@@ -693,6 +713,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       // Update local state
       dispatch({ type: 'DELETE_HABIT', payload: id });
+      
+      // Reschedule notifications with updated habits
+      const updatedHabits = state.habits.filter(h => h.id !== id);
+      await scheduleDailyNotifications(updatedHabits);
       
       console.log('Context: Habit deleted successfully');
     } catch (error) {

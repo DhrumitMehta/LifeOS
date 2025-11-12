@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -8,6 +8,8 @@ import {
   ScrollView,
   Dimensions,
   RefreshControl,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import {
   Card,
@@ -29,10 +31,18 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
 import { Habit, RootStackParamList } from '../types';
 
 type HabitsScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Main'>;
+
+interface WeeklyTask {
+  id: string;
+  text: string;
+  completed: boolean;
+  weekStartDate: string; // ISO string of Monday of the week
+}
 
 const HabitsScreen = () => {
   const navigation = useNavigation<HabitsScreenNavigationProp>();
@@ -44,6 +54,12 @@ const HabitsScreen = () => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [numericValues, setNumericValues] = useState<{[key: string]: string}>({});
+  const [weeklyTasks, setWeeklyTasks] = useState<WeeklyTask[]>([]);
+  const [newTaskText, setNewTaskText] = useState('');
+  const [showAddTaskDialog, setShowAddTaskDialog] = useState(false);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const taskPositions = useRef<{ [key: string]: number }>({});
 
   // Load existing numeric values from habit entries
   React.useEffect(() => {
@@ -75,6 +91,16 @@ const HabitsScreen = () => {
     maxValue: 10,
     unit: 'times',
   });
+
+  // Get the Monday of the current week
+  const getWeekStartDate = (date: Date = new Date()): Date => {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  };
 
   // Generate current week (Monday to Sunday, or Sunday-Saturday if it's Monday)
   const getCurrentWeek = () => {
@@ -111,6 +137,161 @@ const HabitsScreen = () => {
   };
 
   const currentWeek = getCurrentWeek();
+
+  // Load weekly tasks
+  useEffect(() => {
+    loadWeeklyTasks();
+  }, []);
+
+  const loadWeeklyTasks = async () => {
+    try {
+      const currentWeekStart = getWeekStartDate();
+      const currentWeekStartStr = currentWeekStart.toISOString().split('T')[0];
+      
+      const stored = await AsyncStorage.getItem('weeklyTasks');
+      if (stored) {
+        const allTasks: WeeklyTask[] = JSON.parse(stored);
+        // Filter tasks for current week and remove old week tasks
+        const currentWeekTasks = allTasks.filter(task => task.weekStartDate === currentWeekStartStr);
+        
+        // If we have tasks from a different week, clear them and save
+        if (currentWeekTasks.length !== allTasks.length) {
+          await AsyncStorage.setItem('weeklyTasks', JSON.stringify(currentWeekTasks));
+        }
+        
+        setWeeklyTasks(currentWeekTasks);
+      } else {
+        setWeeklyTasks([]);
+      }
+    } catch (error) {
+      console.error('Error loading weekly tasks:', error);
+      setWeeklyTasks([]);
+    }
+  };
+
+  const saveWeeklyTasks = async (tasks: WeeklyTask[]) => {
+    try {
+      await AsyncStorage.setItem('weeklyTasks', JSON.stringify(tasks));
+      setWeeklyTasks(tasks);
+    } catch (error) {
+      console.error('Error saving weekly tasks:', error);
+    }
+  };
+
+  const handleAddTask = () => {
+    if (!newTaskText.trim()) {
+      return;
+    }
+    
+    const currentWeekStart = getWeekStartDate();
+    const currentWeekStartStr = currentWeekStart.toISOString().split('T')[0];
+    
+    const newTask: WeeklyTask = {
+      id: Date.now().toString(),
+      text: newTaskText.trim(),
+      completed: false,
+      weekStartDate: currentWeekStartStr,
+    };
+    
+    const updatedTasks = [...weeklyTasks, newTask];
+    saveWeeklyTasks(updatedTasks);
+    setNewTaskText('');
+    setShowAddTaskDialog(false);
+  };
+
+  const handleToggleTask = (taskId: string) => {
+    const updatedTasks = weeklyTasks.map(task =>
+      task.id === taskId ? { ...task, completed: !task.completed } : task
+    );
+    saveWeeklyTasks(updatedTasks);
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    const task = weeklyTasks.find(t => t.id === taskId);
+    Alert.alert(
+      'Delete Task',
+      `Are you sure you want to delete "${task?.text}"?`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            const updatedTasks = weeklyTasks.filter(task => task.id !== taskId);
+            saveWeeklyTasks(updatedTasks);
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLongPress = (index: number) => {
+    setDraggingIndex(index);
+    dragY.setValue(0);
+  };
+
+  const handleMoveUp = (index: number) => {
+    if (index === 0) return;
+    const newTasks = [...weeklyTasks];
+    const temp = newTasks[index];
+    newTasks[index] = newTasks[index - 1];
+    newTasks[index - 1] = temp;
+    setWeeklyTasks(newTasks);
+    saveWeeklyTasks(newTasks);
+    setDraggingIndex(index - 1);
+  };
+
+  const handleMoveDown = (index: number) => {
+    if (index === weeklyTasks.length - 1) return;
+    const newTasks = [...weeklyTasks];
+    const temp = newTasks[index];
+    newTasks[index] = newTasks[index + 1];
+    newTasks[index + 1] = temp;
+    setWeeklyTasks(newTasks);
+    saveWeeklyTasks(newTasks);
+    setDraggingIndex(index + 1);
+  };
+
+  const createPanResponder = (index: number) => {
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return draggingIndex === index && Math.abs(gestureState.dy) > 10;
+      },
+      onPanResponderGrant: () => {
+        dragY.setValue(0);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (draggingIndex === index) {
+          dragY.setValue(gestureState.dy);
+          
+          // Calculate which position we're hovering over
+          const itemHeight = 50; // Approximate height of each task item
+          const currentPosition = index;
+          const newPosition = Math.round((gestureState.dy + currentPosition * itemHeight) / itemHeight);
+          
+          if (newPosition >= 0 && newPosition < weeklyTasks.length && newPosition !== currentPosition) {
+            // Reorder items
+            const newTasks = [...weeklyTasks];
+            const [movedItem] = newTasks.splice(currentPosition, 1);
+            newTasks.splice(newPosition, 0, movedItem);
+            setWeeklyTasks(newTasks);
+            setDraggingIndex(newPosition);
+          }
+        }
+      },
+      onPanResponderRelease: () => {
+        if (draggingIndex !== null) {
+          saveWeeklyTasks(weeklyTasks);
+          setDraggingIndex(null);
+          dragY.setValue(0);
+        }
+      },
+    });
+  };
 
   // Check if a habit is completed on a specific date
   const isHabitCompletedOnDate = (habitId: string, date: Date) => {
@@ -253,6 +434,7 @@ const HabitsScreen = () => {
     setRefreshing(true);
     try {
       await refreshData();
+      await loadWeeklyTasks(); // Reload weekly tasks to clear old week's tasks
     } catch (error) {
       console.error('Error refreshing data:', error);
     } finally {
@@ -552,26 +734,121 @@ const HabitsScreen = () => {
 
   return (
     <View style={styles.container}>
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
+      <ScrollView
+        style={styles.scrollContainer}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
+        showsVerticalScrollIndicator={true}
       >
-        <View style={styles.gridContainer}>
-          {renderGridHeader()}
-          {currentWeek.map(renderDayRow)}
-        </View>
-      </ScrollView>
+        {/* Weekly Tasks Section */}
+        <Card style={styles.weeklyTasksCard}>
+          <Card.Content>
+            <View style={styles.weeklyTasksHeader}>
+              <Title style={styles.weeklyTasksTitle} numberOfLines={2}>Things to Accomplish this Week</Title>
+              <IconButton
+                icon="plus"
+                size={20}
+                onPress={() => setShowAddTaskDialog(true)}
+                iconColor="#6366f1"
+              />
+            </View>
+            {weeklyTasks.length === 0 ? (
+              <Text style={styles.emptyTasksText}>No tasks for this week. Add one to get started!</Text>
+            ) : (
+              weeklyTasks.map((task, index) => {
+                const isDragging = draggingIndex === index;
+                const panResponder = createPanResponder(index);
+                
+                return (
+                  <Animated.View
+                    key={task.id}
+                    style={[
+                      styles.taskRow,
+                      isDragging && styles.taskRowDragging,
+                      isDragging && {
+                        transform: [{ translateY: dragY }],
+                        zIndex: 1000,
+                        elevation: 8,
+                      },
+                    ]}
+                    {...(isDragging ? panResponder.panHandlers : {})}
+                  >
+                    <TouchableOpacity
+                      onLongPress={() => handleLongPress(index)}
+                      delayLongPress={500}
+                      activeOpacity={0.7}
+                      style={styles.taskContent}
+                    >
+                      <Checkbox
+                        status={task.completed ? 'checked' : 'unchecked'}
+                        onPress={() => handleToggleTask(task.id)}
+                        color="#6366f1"
+                        disabled={isDragging}
+                      />
+                      <Text
+                        style={[
+                          styles.taskText,
+                          task.completed && styles.taskTextCompleted,
+                        ]}
+                        onPress={() => !isDragging && handleToggleTask(task.id)}
+                      >
+                        {task.text}
+                      </Text>
+                    </TouchableOpacity>
+                    {isDragging ? (
+                      <View style={styles.reorderControls}>
+                        <IconButton
+                          icon="chevron-up"
+                          size={18}
+                          onPress={() => handleMoveUp(index)}
+                          iconColor="#6366f1"
+                          disabled={index === 0}
+                        />
+                        <IconButton
+                          icon="chevron-down"
+                          size={18}
+                          onPress={() => handleMoveDown(index)}
+                          iconColor="#6366f1"
+                          disabled={index === weeklyTasks.length - 1}
+                        />
+                        <IconButton
+                          icon="close"
+                          size={18}
+                          onPress={() => {
+                            setDraggingIndex(null);
+                            dragY.setValue(0);
+                          }}
+                          iconColor="#6b7280"
+                        />
+                      </View>
+                    ) : (
+                      <IconButton
+                        icon="delete-outline"
+                        size={18}
+                        onPress={() => handleDeleteTask(task.id)}
+                        iconColor="#ef4444"
+                      />
+                    )}
+                  </Animated.View>
+                );
+              })
+            )}
+          </Card.Content>
+        </Card>
 
-      {state.habits.filter(habit => habit.isActive).length === 0 && (
         <ScrollView 
-          style={styles.emptyScrollView}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          style={styles.horizontalScrollView}
         >
+          <View style={styles.gridContainer}>
+            {renderGridHeader()}
+            {currentWeek.map(renderDayRow)}
+          </View>
+        </ScrollView>
+
+        {state.habits.filter(habit => habit.isActive).length === 0 && (
           <View style={styles.emptyContainer}>
             <Ionicons name="checkmark-circle-outline" size={64} color="#9ca3af" />
             <Title style={styles.emptyTitle}>No Habits Yet</Title>
@@ -586,8 +863,8 @@ const HabitsScreen = () => {
               Add Your First Habit
             </Button>
           </View>
-        </ScrollView>
-      )}
+        )}
+      </ScrollView>
       
       <FAB
         icon="plus"
@@ -758,6 +1035,27 @@ const HabitsScreen = () => {
           </Dialog.Actions>
         </Dialog>
 
+        <Dialog visible={showAddTaskDialog} onDismiss={() => setShowAddTaskDialog(false)}>
+          <Dialog.Title>Add Task for This Week</Dialog.Title>
+          <Dialog.Content>
+            <TextInput
+              label="Task"
+              value={newTaskText}
+              onChangeText={setNewTaskText}
+              style={styles.input}
+              placeholder="Enter a task to accomplish this week..."
+              onSubmitEditing={handleAddTask}
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => {
+              setShowAddTaskDialog(false);
+              setNewTaskText('');
+            }}>Cancel</Button>
+            <Button onPress={handleAddTask} mode="contained">Add Task</Button>
+          </Dialog.Actions>
+        </Dialog>
+
         <Dialog visible={showNumericDialog} onDismiss={handleNumericDialogCancel}>
           <Dialog.Title>
             {selectedHabit?.name} - {selectedDate?.toLocaleDateString()}
@@ -876,6 +1174,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  scrollContainer: {
+    flex: 1,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -883,6 +1184,9 @@ const styles = StyleSheet.create({
   },
   
   // Grid styles
+  horizontalScrollView: {
+    marginBottom: 16,
+  },
   gridContainer: {
     padding: 16,
     minWidth: screenWidth,
@@ -1142,14 +1446,11 @@ const styles = StyleSheet.create({
   },
 
   // Empty state
-  emptyScrollView: {
-    flex: 1,
-  },
   emptyContainer: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 64,
+    paddingHorizontal: 32,
   },
   emptyTitle: {
     marginTop: 16,
@@ -1206,6 +1507,67 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     marginTop: 2,
+  },
+  // Weekly tasks styles
+  weeklyTasksCard: {
+    margin: 16,
+    marginBottom: 8,
+    elevation: 2,
+  },
+  weeklyTasksHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  weeklyTasksTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    flex: 1,
+    marginRight: 8,
+  },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+    paddingVertical: 2,
+    backgroundColor: '#ffffff',
+  },
+  taskRowDragging: {
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  taskContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1f2937',
+    marginLeft: 8,
+  },
+  taskTextCompleted: {
+    textDecorationLine: 'line-through',
+    color: '#9ca3af',
+  },
+  reorderControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  emptyTasksText: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    paddingVertical: 8,
   },
 });
 

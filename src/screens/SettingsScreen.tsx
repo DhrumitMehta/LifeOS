@@ -22,6 +22,20 @@ import {
   SegmentedButtons,
 } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
+import { sendTestNotification, getNotificationPermissions, requestNotificationPermissions, getAllScheduledNotifications } from '../services/notifications';
+import { 
+  saveNotionToken, 
+  removeNotionToken, 
+  saveNotionDatabaseId, 
+  testNotionConnection, 
+  getBotUser,
+  searchNotion,
+  getDatabase,
+  findPageByTitle,
+  getAllPageBlocks,
+  formatBlocksAsText,
+  extractPageTitle,
+} from '../services/notion';
 import { useApp } from '../context/AppContext';
 
 const SettingsScreen = () => {
@@ -31,6 +45,15 @@ const SettingsScreen = () => {
   const [categoryType, setCategoryType] = useState<'income' | 'expense'>('income');
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [categoryName, setCategoryName] = useState('');
+  
+  // Notion integration states
+  const [notionToken, setNotionToken] = useState('');
+  const [notionDatabaseId, setNotionDatabaseId] = useState('');
+  const [notionConnected, setNotionConnected] = useState(false);
+  const [notionLoading, setNotionLoading] = useState(false);
+  const [notionBotInfo, setNotionBotInfo] = useState<any>(null);
+  const [notionJournalContent, setNotionJournalContent] = useState<string>('');
+  const [loadingJournal, setLoadingJournal] = useState(false);
 
   const handleExportData = () => {
     Alert.alert(
@@ -54,6 +77,180 @@ const SettingsScreen = () => {
       'This feature will be available in a future update. Consider exporting your data regularly.',
       [{ text: 'OK' }]
     );
+  };
+
+  // Load Notion configuration on mount
+  React.useEffect(() => {
+    loadNotionConfig();
+  }, []);
+
+  const loadNotionConfig = async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const token = await AsyncStorage.getItem('notion_integration_token');
+      const dbId = await AsyncStorage.getItem('notion_database_id');
+      
+      if (token) {
+        setNotionToken(token);
+        const connected = await testNotionConnection(token);
+        setNotionConnected(connected);
+        
+        if (connected) {
+          try {
+            const botInfo = await getBotUser(token);
+            setNotionBotInfo(botInfo);
+          } catch (error) {
+            console.error('Error getting bot info:', error);
+          }
+        }
+      }
+      
+      if (dbId) {
+        setNotionDatabaseId(dbId);
+      }
+    } catch (error) {
+      console.error('Error loading Notion config:', error);
+    }
+  };
+
+  const handleNotionConnect = async () => {
+    if (!notionToken.trim()) {
+      Alert.alert('Error', 'Please enter your Notion integration token');
+      return;
+    }
+
+    setNotionLoading(true);
+    try {
+      const connected = await testNotionConnection(notionToken);
+      
+      if (connected) {
+        await saveNotionToken(notionToken);
+        setNotionConnected(true);
+        
+        // Get bot user info
+        const botInfo = await getBotUser(notionToken);
+        setNotionBotInfo(botInfo);
+        
+        if (notionDatabaseId.trim()) {
+          await saveNotionDatabaseId(notionDatabaseId);
+        }
+        
+        Alert.alert('Success', 'Successfully connected to Notion!');
+      } else {
+        Alert.alert('Error', 'Failed to connect to Notion. Please check your token.');
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to connect to Notion');
+    } finally {
+      setNotionLoading(false);
+    }
+  };
+
+  const handleNotionDisconnect = async () => {
+    Alert.alert(
+      'Disconnect Notion',
+      'Are you sure you want to disconnect from Notion?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await removeNotionToken();
+              setNotionToken('');
+              setNotionDatabaseId('');
+              setNotionConnected(false);
+              setNotionBotInfo(null);
+              Alert.alert('Success', 'Disconnected from Notion');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to disconnect from Notion');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSearchNotionDatabases = async () => {
+    if (!notionToken.trim()) {
+      Alert.alert('Error', 'Please connect to Notion first');
+      return;
+    }
+
+    setNotionLoading(true);
+    try {
+      const results = await searchNotion(
+        undefined,
+        { value: 'database', property: 'object' },
+        { direction: 'descending', timestamp: 'last_edited_time' },
+        notionToken
+      );
+      
+      if (results.results.length === 0) {
+        Alert.alert('No Databases', 'No databases found in your Notion workspace');
+        return;
+      }
+
+      const databaseOptions = results.results.map((db: any) => ({
+        title: db.title?.[0]?.plain_text || 'Untitled Database',
+        id: db.id,
+      }));
+
+      Alert.alert(
+        'Select Database',
+        databaseOptions.map((db: any, index: number) => `${index + 1}. ${db.title}`).join('\n'),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          ...databaseOptions.map((db: any) => ({
+            text: db.title,
+            onPress: () => {
+              setNotionDatabaseId(db.id);
+              saveNotionDatabaseId(db.id);
+            },
+          })),
+        ]
+      );
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to search databases');
+    } finally {
+      setNotionLoading(false);
+    }
+  };
+
+  const handleLoadMyJournal = async () => {
+    if (!notionToken.trim()) {
+      Alert.alert('Error', 'Please connect to Notion first');
+      return;
+    }
+
+    setLoadingJournal(true);
+    try {
+      // Search for "My Journal" page
+      const journalPage = await findPageByTitle('My Journal', notionToken);
+      
+      if (!journalPage) {
+        Alert.alert('Not Found', 'Could not find a page titled "My Journal" in your Notion workspace');
+        setLoadingJournal(false);
+        return;
+      }
+
+      // Get all blocks from the page
+      const blocks = await getAllPageBlocks(journalPage.id, notionToken);
+      
+      // Format blocks as text
+      const content = formatBlocksAsText(blocks);
+      const pageTitle = extractPageTitle(journalPage);
+      
+      setNotionJournalContent(`# ${pageTitle}\n\n${content}`);
+      
+      Alert.alert('Success', `Loaded "My Journal" page with ${blocks.length} blocks`);
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to load My Journal page');
+      console.error('Error loading journal:', error);
+    } finally {
+      setLoadingJournal(false);
+    }
   };
 
   const handleClearData = () => {
@@ -166,6 +363,119 @@ const SettingsScreen = () => {
         </Card.Content>
       </Card>
 
+      {/* Notion Integration */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Title style={styles.cardTitle}>Notion Integration</Title>
+          <Text style={styles.descriptionText}>
+            Connect your LifeOS app to your Notion workspace to sync data with your second brain.
+          </Text>
+          
+          {notionConnected && notionBotInfo && (
+            <View style={styles.notionStatus}>
+              <Ionicons name="checkmark-circle" size={20} color="#10b981" />
+              <Text style={styles.notionStatusText}>
+                Connected as: {notionBotInfo.name || notionBotInfo.id}
+              </Text>
+            </View>
+          )}
+
+          <TextInput
+            label="Notion Integration Token"
+            value={notionToken}
+            onChangeText={setNotionToken}
+            mode="outlined"
+            secureTextEntry
+            placeholder="secret_..."
+            style={styles.notionInput}
+            disabled={notionConnected}
+            helperText="Get your token from notion.so/my-integrations"
+          />
+
+          <TextInput
+            label="Database ID (Optional)"
+            value={notionDatabaseId}
+            onChangeText={setNotionDatabaseId}
+            mode="outlined"
+            placeholder="Database ID or URL"
+            style={styles.notionInput}
+            helperText="The ID of the Notion database to sync with"
+          />
+
+          <View style={styles.notionButtons}>
+            {!notionConnected ? (
+              <Button
+                mode="contained"
+                onPress={handleNotionConnect}
+                style={[styles.testButton, { flex: 1, marginRight: 8 }]}
+                icon="link"
+                loading={notionLoading}
+                disabled={notionLoading}
+              >
+                Connect
+              </Button>
+            ) : (
+              <Button
+                mode="outlined"
+                onPress={handleNotionDisconnect}
+                style={[styles.testButton, { flex: 1, marginRight: 8 }]}
+                icon="link-off"
+                textColor="#ef4444"
+              >
+                Disconnect
+              </Button>
+            )}
+            <Button
+              mode="outlined"
+              onPress={handleSearchNotionDatabases}
+              style={[styles.testButton, { flex: 1 }]}
+              icon="database-search"
+              disabled={!notionConnected || notionLoading}
+            >
+              Find DB
+            </Button>
+          </View>
+
+          <Divider style={styles.divider} />
+          
+          {notionConnected && (
+            <>
+              <Button
+                mode="contained"
+                onPress={handleLoadMyJournal}
+                style={styles.testButton}
+                icon="book-open"
+                loading={loadingJournal}
+                disabled={loadingJournal}
+              >
+                Load "My Journal" Page
+              </Button>
+              
+              {notionJournalContent && (
+                <Card style={styles.journalCard}>
+                  <Card.Content>
+                    <Title style={styles.journalTitle}>My Journal Content</Title>
+                    <ScrollView style={styles.journalContent} nestedScrollEnabled>
+                      <Text style={styles.journalText}>{notionJournalContent}</Text>
+                    </ScrollView>
+                  </Card.Content>
+                </Card>
+              )}
+            </>
+          )}
+
+          <Divider style={styles.divider} />
+          <Text style={styles.descriptionText}>
+            To get started:{'\n'}
+            1. Go to notion.so/my-integrations{'\n'}
+            2. Create a new integration{'\n'}
+            3. Copy the "Internal Integration Token"{'\n'}
+            4. Share your database/page with the integration{'\n'}
+            5. Paste the token above and connect
+          </Text>
+        </Card.Content>
+      </Card>
+
       {/* Transaction Categories */}
       <Card style={styles.card}>
         <Card.Content>
@@ -234,6 +544,60 @@ const SettingsScreen = () => {
       <Card style={styles.card}>
         <Card.Content>
           <Title style={styles.cardTitle}>Notifications</Title>
+          <View style={styles.notificationButtons}>
+            <Button
+              mode="contained"
+              onPress={async () => {
+                try {
+                  // Check permissions first
+                  const permissions = await getNotificationPermissions();
+                  if (permissions.status !== 'granted') {
+                    const newPermissions = await requestNotificationPermissions();
+                    if (newPermissions.status !== 'granted') {
+                      Alert.alert(
+                        'Permission Required',
+                        'Please enable notifications in your device settings to receive notifications.'
+                      );
+                      return;
+                    }
+                  }
+                  
+                  // Send test notification
+                  await sendTestNotification();
+                  Alert.alert('Success', 'Test notification sent! It will appear in 2 seconds.');
+                } catch (error) {
+                  console.error('Error sending test notification:', error);
+                  Alert.alert('Error', 'Failed to send test notification. Please try again.');
+                }
+              }}
+              style={[styles.testButton, { flex: 1, marginRight: 8 }]}
+              icon="bell"
+            >
+              Test Notification
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={async () => {
+                try {
+                  const scheduled = await getAllScheduledNotifications();
+                  const count = scheduled.length;
+                  Alert.alert(
+                    'Scheduled Notifications',
+                    `You have ${count} notification${count !== 1 ? 's' : ''} scheduled.\n\nThese will fire even if the app is closed!`,
+                    [{ text: 'OK' }]
+                  );
+                } catch (error) {
+                  console.error('Error getting scheduled notifications:', error);
+                  Alert.alert('Error', 'Failed to check scheduled notifications.');
+                }
+              }}
+              style={[styles.testButton, { flex: 1 }]}
+              icon="check-circle"
+            >
+              Check Scheduled
+            </Button>
+          </View>
+          <Divider style={styles.divider} />
           <List.Item
             title="Habit Reminders"
             description="Get reminded to complete your habits"
@@ -495,6 +859,52 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 16,
+  },
+  testButton: {
+    marginBottom: 16,
+    backgroundColor: '#6366f1',
+  },
+  notionInput: {
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+  },
+  notionButtons: {
+    flexDirection: 'row',
+    marginTop: 8,
+    marginBottom: 16,
+    gap: 8,
+  },
+  notionStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  notionStatusText: {
+    marginLeft: 8,
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  journalCard: {
+    marginTop: 16,
+    maxHeight: 400,
+  },
+  journalTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  journalContent: {
+    maxHeight: 300,
+  },
+  journalText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#374151',
   },
   versionText: {
     fontSize: 14,

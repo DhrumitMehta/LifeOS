@@ -1,0 +1,40 @@
+# EAS Build ignore file
+# Files and directories listed here will be excluded from EAS builds
+
+# Expo generated files (should not be in build)
+.expo/
+
+# History/backup files (VS Code Local History extension)
+.history/
+
+# Documentation files (not needed in app)
+*.md
+!README.md
+
+# Scripts (development tools, not needed in production)
+scripts/
+
+# Excel files
+*.xlsx
+
+# Import/export data files
+imported-data.json
+
+# SQL schema files (not needed in app)
+*.sql
+
+# Development config files
+src/config/balances.json
+src/config/supabase.example.ts
+
+# Database migrations (not needed in app)
+src/database/migrations/
+
+# Development documentation
+BUILD_INSTRUCTIONS.md
+SUPABASE_SETUP.md
+MUTUAL_FUND_FEATURE.md
+
+# Logo source file (already copied to assets)
+lifeos_logo.png
+

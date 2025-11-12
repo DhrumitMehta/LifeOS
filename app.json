@@ -1,7 +1,8 @@
 {
   "expo": {
     "name": "LifeOS",
-    "slug": "lifeos",
+    "slug": "life-os",
+    "owner": "dhrumit_mehta",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -38,9 +39,8 @@
     "sdkVersion": "54.0.0",
     "extra": {
       "eas": {
-        "projectId": "4f3c6340-5f2c-4748-ade3-34371cbc656d"
+        "projectId": "1692725a-a1e9-4f06-b337-13a95fa86dfb"
       }
-    },
-    "owner": "dhrumit_21"
+    }
   }
 }

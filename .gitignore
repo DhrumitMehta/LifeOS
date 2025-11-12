@@ -40,6 +40,7 @@ yarn-error.*
 .idea/
 *.swp
 *.swo
+.history/
 
 # OS
 Thumbs.db

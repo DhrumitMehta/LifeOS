@@ -12,17 +12,11 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EAS_NO_VCS": "0"
       }
     },
     "production": {
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EAS_NO_VCS": "0"
       }
     }
   },

@@ -46,7 +46,8 @@ yarn-error.*
 Thumbs.db
 
 # Supabase credentials
-src/config/supabase.ts
+# Note: supabase.ts is now committed (anon key is public, safe to commit)
+# src/config/supabase.ts
 
 # Personal finances Excel file
 Personal Finances Sheet.xlsx

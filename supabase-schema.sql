@@ -119,6 +119,24 @@ CREATE TABLE IF NOT EXISTS accounts (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- Reviews table
+CREATE TABLE IF NOT EXISTS reviews (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('monthly', 'yearly')),
+    period TEXT NOT NULL,
+    start_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_date TIMESTAMP WITH TIME ZONE NOT NULL,
+    journal_stats JSONB,
+    habit_stats JSONB,
+    finance_stats JSONB,
+    reflections TEXT,
+    achievements TEXT,
+    challenges TEXT,
+    goals_for_next_period TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_habits_active ON habits(is_active);
 CREATE INDEX IF NOT EXISTS idx_habit_entries_habit_id ON habit_entries(habit_id);
@@ -130,6 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(type);
 CREATE INDEX IF NOT EXISTS idx_budgets_active ON budgets(is_active);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_active ON subscriptions(is_active);
 CREATE INDEX IF NOT EXISTS idx_accounts_active ON accounts(is_active);
+CREATE INDEX IF NOT EXISTS idx_reviews_type ON reviews(type);
+CREATE INDEX IF NOT EXISTS idx_reviews_period ON reviews(period);
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE habits ENABLE ROW LEVEL SECURITY;
@@ -140,6 +160,7 @@ ALTER TABLE investments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 
 -- Create policies for public access (you may want to restrict this based on your auth requirements)
 CREATE POLICY "Enable all operations for all users" ON habits FOR ALL USING (true);
@@ -150,3 +171,4 @@ CREATE POLICY "Enable all operations for all users" ON investments FOR ALL USING
 CREATE POLICY "Enable all operations for all users" ON budgets FOR ALL USING (true);
 CREATE POLICY "Enable all operations for all users" ON subscriptions FOR ALL USING (true);
 CREATE POLICY "Enable all operations for all users" ON accounts FOR ALL USING (true);
+CREATE POLICY "Enable all operations for all users" ON reviews FOR ALL USING (true);

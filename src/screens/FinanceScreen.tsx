@@ -20,6 +20,7 @@ import {
   TextInput,
   Button,
   Chip,
+  Searchbar,
 } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
@@ -127,6 +128,7 @@ const FinanceScreen = () => {
   const [transactionLimit, setTransactionLimit] = useState(50);
   const [expandedHistories, setExpandedHistories] = useState<Set<string>>(new Set());
   const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [isEditingGoals, setIsEditingGoals] = useState(false);
   const [financialGoals, setFinancialGoals] = useState<string[]>([
     'Be independent - not take a single penny from my parents',
@@ -830,9 +832,51 @@ const FinanceScreen = () => {
     setTransactionLimit(prev => prev + 50);
   };
 
+  // Filter transactions based on search query - must be at component level
+  const filteredTransactions = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return state.transactions;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+    return state.transactions.filter(transaction => {
+      // Search in description
+      if (transaction.description.toLowerCase().includes(query)) {
+        return true;
+      }
+      // Search in category
+      if (transaction.category.toLowerCase().includes(query)) {
+        return true;
+      }
+      // Search in subcategory
+      if (transaction.subcategory?.toLowerCase().includes(query)) {
+        return true;
+      }
+      // Search in account
+      if (transaction.account?.toLowerCase().includes(query)) {
+        return true;
+      }
+      // Search in tags
+      if (transaction.tags.some(tag => tag.toLowerCase().includes(query))) {
+        return true;
+      }
+      // Search in amount (convert to string and search)
+      if (transaction.amount.toString().includes(query)) {
+        return true;
+      }
+      // Search in formatted currency (remove currency symbols)
+      const formattedAmount = formatCurrency(transaction.amount).toLowerCase();
+      if (formattedAmount.includes(query)) {
+        return true;
+      }
+      return false;
+    });
+  }, [state.transactions, searchQuery]);
+
   const renderTransactions = () => {
-    const displayedTransactions = state.transactions.slice(0, transactionLimit);
-    const hasMore = state.transactions.length > transactionLimit;
+
+    const displayedTransactions = filteredTransactions.slice(0, transactionLimit);
+    const hasMore = filteredTransactions.length > transactionLimit;
 
     return (
       <ScrollView 
@@ -841,7 +885,28 @@ const FinanceScreen = () => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {state.transactions.length > 0 ? (
+        {/* Search Bar */}
+        <Card style={styles.searchCard}>
+          <Card.Content>
+            <Searchbar
+              placeholder="Search transactions..."
+              onChangeText={setSearchQuery}
+              value={searchQuery}
+              style={styles.searchbar}
+              inputStyle={styles.searchbarInput}
+              iconColor="#6366f1"
+              clearIcon="close-circle"
+              onClearIconPress={() => setSearchQuery('')}
+            />
+            {searchQuery.trim() && (
+              <Text style={styles.searchResultsText}>
+                {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? 's' : ''} found
+              </Text>
+            )}
+          </Card.Content>
+        </Card>
+
+        {filteredTransactions.length > 0 ? (
           <>
             {displayedTransactions.map((transaction) => (
               <Card key={transaction.id} style={styles.transactionCard}>
@@ -895,7 +960,7 @@ const FinanceScreen = () => {
                 <Card.Content>
                   <TouchableOpacity onPress={handleLoadMore} style={styles.loadMoreButton}>
                     <Text style={styles.loadMoreText}>
-                      Load More ({state.transactions.length - transactionLimit} remaining)
+                      Load More ({filteredTransactions.length - transactionLimit} remaining)
                     </Text>
                   </TouchableOpacity>
                 </Card.Content>
@@ -905,10 +970,24 @@ const FinanceScreen = () => {
         ) : (
           <View style={styles.emptyContainer}>
             <Ionicons name="receipt-outline" size={64} color="#9ca3af" />
-            <Title style={styles.emptyTitle}>No Transactions</Title>
+            <Title style={styles.emptyTitle}>
+              {searchQuery.trim() ? 'No Transactions Found' : 'No Transactions'}
+            </Title>
             <Paragraph style={styles.emptyDescription}>
-              Start tracking your income and expenses!
+              {searchQuery.trim() 
+                ? `No transactions match "${searchQuery}". Try a different search term.`
+                : 'Start tracking your income and expenses!'
+              }
             </Paragraph>
+            {searchQuery.trim() && (
+              <Button
+                mode="outlined"
+                onPress={() => setSearchQuery('')}
+                style={styles.clearSearchButton}
+              >
+                Clear Search
+              </Button>
+            )}
           </View>
         )}
       </ScrollView>
@@ -2029,6 +2108,27 @@ const styles = StyleSheet.create({
   modalContent: {
     flex: 1,
     padding: 16,
+  },
+  searchCard: {
+    marginBottom: 12,
+    elevation: 2,
+  },
+  searchbar: {
+    backgroundColor: '#ffffff',
+    elevation: 0,
+  },
+  searchbarInput: {
+    fontSize: 14,
+  },
+  searchResultsText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  clearSearchButton: {
+    marginTop: 16,
+    borderColor: '#6366f1',
   },
   transactionCard: {
     marginBottom: 12,

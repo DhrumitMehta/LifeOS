@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, AppStateStatus } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Provider as PaperProvider } from 'react-native-paper';
+import { Provider as PaperProvider, IconButton } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,6 +13,7 @@ import { RootStackParamList, TabParamList } from './src/types';
 import { registerForPushNotificationsAsync } from './src/services/notifications';
 import { NotificationScheduler } from './src/components/NotificationScheduler';
 import { NotionConnectionModal } from './src/components/NotionConnectionModal';
+import MenuDrawer from './src/components/MenuDrawer';
 import { testNotionConnection } from './src/services/notion';
 import { appTheme } from './src/theme';
 
@@ -23,6 +24,9 @@ import JournalScreen from './src/screens/JournalScreen';
 import FinanceScreen from './src/screens/FinanceScreen';
 import AnalyticsScreen from './src/screens/AnalyticsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import ReviewsScreen from './src/screens/ReviewsScreen';
+import VisualizationScreen from './src/screens/VisualizationScreen';
 import HabitDetailScreen from './src/screens/HabitDetailScreen';
 import JournalDetailScreen from './src/screens/JournalDetailScreen';
 import TransactionDetailScreen from './src/screens/TransactionDetailScreen';
@@ -32,7 +36,7 @@ import BudgetDetailScreen from './src/screens/BudgetDetailScreen';
 const Tab = createBottomTabNavigator<TabParamList>();
 const Stack = createStackNavigator<RootStackParamList>();
 
-const TabNavigator = () => {
+const TabNavigator = ({ onMenuPress }: { onMenuPress: () => void }) => {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -47,10 +51,8 @@ const TabNavigator = () => {
             iconName = focused ? 'book' : 'book-outline';
           } else if (route.name === 'Finance') {
             iconName = focused ? 'wallet' : 'wallet-outline';
-          } else if (route.name === 'Analytics') {
-            iconName = focused ? 'analytics' : 'analytics-outline';
-          } else if (route.name === 'Settings') {
-            iconName = focused ? 'settings' : 'settings-outline';
+          } else if (route.name === 'Visualization') {
+            iconName = focused ? 'videocam' : 'videocam-outline';
           } else {
             iconName = 'help-outline';
           }
@@ -66,6 +68,15 @@ const TabNavigator = () => {
         headerTitleStyle: {
           fontWeight: 'bold',
         },
+        headerLeft: () => (
+          <IconButton
+            icon="menu"
+            iconColor="#fff"
+            size={24}
+            onPress={onMenuPress}
+            style={{ marginLeft: 8 }}
+          />
+        ),
       })}
     >
       <Tab.Screen 
@@ -89,14 +100,9 @@ const TabNavigator = () => {
         options={{ title: 'Finance' }}
       />
       <Tab.Screen 
-        name="Analytics" 
-        component={AnalyticsScreen}
-        options={{ title: 'Analytics' }}
-      />
-      <Tab.Screen 
-        name="Settings" 
-        component={SettingsScreen}
-        options={{ title: 'Settings' }}
+        name="Visualization" 
+        component={VisualizationScreen}
+        options={{ title: 'Visualization' }}
       />
     </Tab.Navigator>
   );
@@ -107,6 +113,8 @@ const AppContent = () => {
   const responseListener = useRef<Notifications.Subscription>();
   const [showNotionModal, setShowNotionModal] = useState(false);
   const [notionChecked, setNotionChecked] = useState(false);
+  const [showMenuDrawer, setShowMenuDrawer] = useState(false);
+  const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
 
   useEffect(() => {
     // Register for push notifications
@@ -191,7 +199,7 @@ const AppContent = () => {
           onSkip={handleNotionSkip}
         />
       )}
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator
           screenOptions={{
             headerStyle: {
@@ -205,8 +213,29 @@ const AppContent = () => {
         >
           <Stack.Screen 
             name="Main" 
-            component={TabNavigator}
             options={{ headerShown: false }}
+          >
+            {() => <TabNavigator onMenuPress={() => setShowMenuDrawer(true)} />}
+          </Stack.Screen>
+          <Stack.Screen 
+            name="Profile" 
+            component={ProfileScreen}
+            options={{ title: 'My Profile' }}
+          />
+          <Stack.Screen 
+            name="Reviews" 
+            component={ReviewsScreen}
+            options={{ title: 'Reviews' }}
+          />
+          <Stack.Screen 
+            name="Analytics" 
+            component={AnalyticsScreen}
+            options={{ title: 'Analytics' }}
+          />
+          <Stack.Screen 
+            name="Settings" 
+            component={SettingsScreen}
+            options={{ title: 'Settings' }}
           />
           <Stack.Screen 
             name="HabitDetail" 
@@ -235,6 +264,11 @@ const AppContent = () => {
           />
         </Stack.Navigator>
       </NavigationContainer>
+      <MenuDrawer 
+        visible={showMenuDrawer} 
+        onClose={() => setShowMenuDrawer(false)}
+        navigationRef={navigationRef}
+      />
       <StatusBar style="light" />
     </>
   );

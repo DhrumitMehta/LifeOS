@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription } from '../types';
+import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription, Review } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { offlineSync } from '../services/offlineSync';
 
@@ -726,6 +726,209 @@ class SupabaseDatabase {
       const subscriptions = await this.getSubscriptions();
       const filtered = subscriptions.filter(s => s.id !== id);
       return this.saveSubscriptions(filtered);
+    }
+  };
+
+  // Reviews
+  getReviews = async (): Promise<Review[]> => {
+    if (!this.useSupabase) {
+      return this.getAsyncStorageData<Review>('lifeos_reviews');
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('reviews')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      if (!data) return [];
+
+      return data.map((item: any) => {
+        const review = this.deserializeDates(item);
+        // Parse JSON fields
+        if (review.journalStats) {
+          review.journalStats = typeof review.journalStats === 'string' 
+            ? JSON.parse(review.journalStats) 
+            : review.journalStats;
+        }
+        if (review.habitStats) {
+          review.habitStats = typeof review.habitStats === 'string' 
+            ? JSON.parse(review.habitStats) 
+            : review.habitStats;
+        }
+        if (review.financeStats) {
+          review.financeStats = typeof review.financeStats === 'string' 
+            ? JSON.parse(review.financeStats) 
+            : review.financeStats;
+        }
+        return review;
+      });
+    } catch (error) {
+      console.error('Error getting reviews:', error);
+      return this.getAsyncStorageData<Review>('lifeos_reviews');
+    }
+  };
+
+  saveReviews = async (reviews: Review[]): Promise<void> => {
+    if (!this.useSupabase) {
+      return this.setAsyncStorageData('lifeos_reviews', reviews);
+    }
+
+    try {
+      // Serialize complex objects to JSON
+      const serializedReviews = reviews.map(review => {
+        const serialized = this.serializeDates(review);
+        if (serialized.journalStats) {
+          serialized.journalStats = JSON.stringify(serialized.journalStats);
+        }
+        if (serialized.habitStats) {
+          serialized.habitStats = JSON.stringify(serialized.habitStats);
+        }
+        if (serialized.financeStats) {
+          serialized.financeStats = JSON.stringify(serialized.financeStats);
+        }
+        return serialized;
+      });
+
+      // First, clear existing reviews
+      await supabase.from('reviews').delete().neq('id', '');
+
+      // Then insert all reviews
+      if (serializedReviews.length > 0) {
+        const { error } = await supabase
+          .from('reviews')
+          .insert(serializedReviews);
+
+        if (error) throw error;
+      }
+    } catch (error) {
+      console.error('Error saving reviews:', error);
+      return this.setAsyncStorageData('lifeos_reviews', reviews);
+    }
+  };
+
+  addReview = async (review: Review): Promise<void> => {
+    if (!this.useSupabase) {
+      console.log('Using AsyncStorage for reviews');
+      const existing = await this.getAsyncStorageData<Review>('lifeos_reviews');
+      await this.setAsyncStorageData('lifeos_reviews', [...existing, review]);
+      return;
+    }
+
+    try {
+      console.log('Adding review to Supabase:', review.id);
+      const serializedReview = this.serializeDates(review);
+      // Serialize complex objects to JSON
+      if (serializedReview.journalStats) {
+        serializedReview.journalStats = JSON.stringify(serializedReview.journalStats);
+      }
+      if (serializedReview.habitStats) {
+        serializedReview.habitStats = JSON.stringify(serializedReview.habitStats);
+      }
+      if (serializedReview.financeStats) {
+        serializedReview.financeStats = JSON.stringify(serializedReview.financeStats);
+      }
+
+      console.log('Serialized review:', serializedReview);
+
+      const { data, error } = await supabase
+        .from('reviews')
+        .insert(serializedReview)
+        .select();
+
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
+
+      console.log('Review added successfully:', data);
+    } catch (error) {
+      console.error('Error adding review to Supabase, falling back to AsyncStorage:', error);
+      // Save to AsyncStorage as fallback
+      const existing = await this.getAsyncStorageData<Review>('lifeos_reviews');
+      await this.setAsyncStorageData('lifeos_reviews', [...existing, review]);
+
+      // Queue for sync when online
+      try {
+        await offlineSync.queueOperation('create', 'reviews', review);
+      } catch (syncError) {
+        console.error('Error queueing for sync:', syncError);
+      }
+    }
+  };
+
+  updateReview = async (review: Review): Promise<void> => {
+    if (!this.useSupabase) {
+      console.log('Using AsyncStorage for reviews update');
+      const reviews = await this.getReviews();
+      const index = reviews.findIndex(r => r.id === review.id);
+      if (index !== -1) {
+        reviews[index] = review;
+        return this.saveReviews(reviews);
+      }
+      return;
+    }
+
+    try {
+      console.log('Updating review in Supabase:', review.id);
+      const serializedReview = this.serializeDates(review);
+      // Serialize complex objects to JSON
+      if (serializedReview.journalStats) {
+        serializedReview.journalStats = JSON.stringify(serializedReview.journalStats);
+      }
+      if (serializedReview.habitStats) {
+        serializedReview.habitStats = JSON.stringify(serializedReview.habitStats);
+      }
+      if (serializedReview.financeStats) {
+        serializedReview.financeStats = JSON.stringify(serializedReview.financeStats);
+      }
+
+      console.log('Serialized review for update:', serializedReview);
+
+      const { data, error } = await supabase
+        .from('reviews')
+        .update(serializedReview)
+        .eq('id', review.id)
+        .select();
+
+      if (error) {
+        console.error('Supabase update error:', error);
+        throw error;
+      }
+
+      console.log('Review updated successfully:', data);
+    } catch (error) {
+      console.error('Error updating review in Supabase, falling back to AsyncStorage:', error);
+      const reviews = await this.getReviews();
+      const index = reviews.findIndex(r => r.id === review.id);
+      if (index !== -1) {
+        reviews[index] = review;
+        return this.saveReviews(reviews);
+      }
+    }
+  };
+
+  deleteReview = async (id: string): Promise<void> => {
+    if (!this.useSupabase) {
+      const reviews = await this.getReviews();
+      const filtered = reviews.filter(r => r.id !== id);
+      return this.saveReviews(filtered);
+    }
+
+    try {
+      const { error } = await supabase
+        .from('reviews')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error deleting review:', error);
+      const reviews = await this.getReviews();
+      const filtered = reviews.filter(r => r.id !== id);
+      return this.saveReviews(filtered);
     }
   };
 

@@ -140,6 +140,74 @@ export interface Analytics {
   }[];
 }
 
+export interface Profile {
+  id: string;
+  name?: string;
+  bio?: string;
+  likes?: string[]; // Things I like
+  principles?: string[]; // My principles/values
+  strengths?: string[]; // My strengths
+  weaknesses?: string[]; // Areas for improvement
+  goals?: string[]; // Personal goals
+  interests?: string[]; // Interests and hobbies
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Review {
+  id: string;
+  type: 'monthly' | 'yearly';
+  period: string; // e.g., "2024-01" for monthly, "2024" for yearly
+  startDate: Date;
+  endDate: Date;
+  // Generated statistics
+  journalStats?: {
+    totalEntries: number;
+    averageMood: string;
+    mostCommonTags: string[];
+    memorableMoments: string[];
+    madeYesterdayBetter: string[];
+    improveToday: string[];
+    makeTodayGreat: string[];
+    yesterdayMood: { mood: 'positive' | 'negative'; date: Date }[];
+    affirmations: string[];
+    openThoughts: string[];
+  };
+  habitStats?: {
+    totalHabits: number;
+    completedHabits: number;
+    averageCompletionRate: number;
+    longestStreak: { habitName: string; days: number };
+    topPerformingHabits: { habitName: string; completionRate: number }[];
+    habitCounts: { habitName: string; count: number }[];
+    mostPerformedHabit: { habitName: string; count: number };
+    numericHabitAverages: { habitName: string; unit: string; average: number; totalEntries: number }[];
+  };
+  financeStats?: {
+    totalIncome: number;
+    totalExpenses: number;
+    netSavings: number;
+    topExpenseCategories: { category: string; amount: number }[];
+    topIncomeCategories: { category: string; amount: number }[];
+    highestSpendingCategory: { category: string; amount: number } | null;
+    highestTransaction: { description: string; amount: number; type: 'income' | 'expense'; date: Date } | null;
+    investmentProgress: {
+      periodInvestments: number;
+      allTimeInvestments: number;
+      periodCount: number;
+      allTimeCount: number;
+      newInvestmentsThisPeriod: number;
+    };
+  };
+  // User's open writing
+  reflections?: string;
+  achievements?: string;
+  challenges?: string;
+  goalsForNextPeriod?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export type RootStackParamList = {
   Main: { screen?: string } | undefined;
   HabitDetail: { habitId: string };
@@ -147,6 +215,8 @@ export type RootStackParamList = {
   TransactionDetail: { transactionId?: string };
   InvestmentDetail: { investmentId?: string };
   BudgetDetail: { budgetId?: string };
+  Profile: undefined;
+  Reviews: undefined;
   Analytics: undefined;
   Settings: undefined;
 };
@@ -156,6 +226,5 @@ export type TabParamList = {
   Habits: undefined;
   Journal: undefined;
   Finance: undefined;
-  Analytics: undefined;
-  Settings: undefined;
+  Visualization: undefined;
 };

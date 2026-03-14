@@ -1,64 +1,101 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
+  Dimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import {
-  Card,
   Title,
   Text,
   Button,
-  Checkbox,
 } from 'react-native-paper';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
-import { TabParamList } from '../types';
 import { 
   getRandomEntryFromDatabase, 
   extractPageTitle, 
   extractRichText,
   testNotionConnection,
 } from '../services/notion';
+import { calculateWellbeingScore } from '../services/wellbeingScore';
 
-type HomeScreenNavigationProp = BottomTabNavigationProp<TabParamList, 'Home'>;
-
-interface DailyChecklist {
-  transactionsAdded: boolean;
-  journalEntryAdded: boolean;
-  habitsLogged: boolean;
-  date: string; // ISO date string
-}
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const SLIDE_PADDING = 24;
+const AUTO_SLIDE_INTERVAL_MS = 3500;
+const SLIDE_COUNT = 4;
 
 interface NotionContent {
   highlight: { title: string; content: string } | null;
   idea: { title: string; content: string } | null;
 }
 
+function getGreeting(): { text: string; emoji: string } {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12) return { text: 'Good Morning', emoji: '☀️' };
+  if (hour >= 12 && hour < 17) return { text: 'Good Afternoon', emoji: '🌤️' };
+  if (hour >= 17 && hour < 21) return { text: 'Good Evening', emoji: '🌅' };
+  return { text: 'Good Night', emoji: '🌙' };
+}
+
 const HomeScreen = () => {
-  const navigation = useNavigation<HomeScreenNavigationProp>();
   const { state } = useApp();
-  const [checklist, setChecklist] = useState<DailyChecklist>({
-    transactionsAdded: false,
-    journalEntryAdded: false,
-    habitsLogged: false,
-    date: new Date().toISOString().split('T')[0],
-  });
   const [notionContent, setNotionContent] = useState<NotionContent>({
     highlight: null,
     idea: null,
   });
   const [loadingNotion, setLoadingNotion] = useState(false);
+  const [slideIndex, setSlideIndex] = useState(0);
+  const [currentTime, setCurrentTime] = useState(() =>
+    new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  );
+  const scrollRef = useRef<ScrollView>(null);
+  const slideIndexRef = useRef(0);
+  const autoSlideIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load checklist for today
+  const stopAutoSlide = () => {
+    if (autoSlideIntervalRef.current != null) {
+      clearInterval(autoSlideIntervalRef.current);
+      autoSlideIntervalRef.current = null;
+    }
+  };
+
+  const startAutoSlide = () => {
+    stopAutoSlide();
+    autoSlideIntervalRef.current = setInterval(() => {
+      const next = (slideIndexRef.current + 1) % SLIDE_COUNT;
+      slideIndexRef.current = next;
+      setSlideIndex(next);
+      scrollRef.current?.scrollTo({ x: next * SCREEN_WIDTH, animated: true });
+    }, AUTO_SLIDE_INTERVAL_MS);
+  };
+
   useEffect(() => {
-    loadTodayChecklist();
     loadNotionContent();
   }, []);
+
+  // Update time every minute
+  useEffect(() => {
+    const tick = () =>
+      setCurrentTime(
+        new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+      );
+    const id = setInterval(tick, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-advance slides every 3.5s (paused while user is touching)
+  useEffect(() => {
+    startAutoSlide();
+    return () => stopAutoSlide();
+  }, []);
+
+  const handleTouchStart = () => stopAutoSlide();
+  const handleTouchEnd = () => startAutoSlide();
 
   // Reload Notion content when screen comes into focus
   useFocusEffect(
@@ -232,140 +269,10 @@ const HomeScreen = () => {
     }
   };
 
-  // Check if checklist needs to be reset for new day
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    if (checklist.date !== today) {
-      // New day, reset checklist
-      const newChecklist: DailyChecklist = {
-        transactionsAdded: false,
-        journalEntryAdded: false,
-        habitsLogged: false,
-        date: today,
-      };
-      setChecklist(newChecklist);
-      saveChecklist(newChecklist);
-    }
-  }, []);
-
-  const loadTodayChecklist = async () => {
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const stored = await AsyncStorage.getItem('dailyChecklist');
-      
-      if (stored) {
-        const saved: DailyChecklist = JSON.parse(stored);
-        // If it's from today, use it; otherwise create new one
-        if (saved.date === today) {
-          setChecklist(saved);
-        } else {
-          const newChecklist: DailyChecklist = {
-            transactionsAdded: false,
-            journalEntryAdded: false,
-            habitsLogged: false,
-            date: today,
-          };
-          setChecklist(newChecklist);
-          await saveChecklist(newChecklist);
-        }
-      }
-    } catch (error) {
-      console.error('Error loading checklist:', error);
-    }
-  };
-
-  const saveChecklist = async (checklist: DailyChecklist) => {
-    try {
-      await AsyncStorage.setItem('dailyChecklist', JSON.stringify(checklist));
-    } catch (error) {
-      console.error('Error saving checklist:', error);
-    }
-  };
-
-  const markAsDone = async (key: keyof DailyChecklist) => {
-    if (key === 'date') return; // Don't allow changing date
-    
-    const updated = { ...checklist, [key]: true };
-    setChecklist(updated);
-    await saveChecklist(updated);
-  };
-
-  // Check if there were transactions yesterday
-  const hasYesterdayTransactions = () => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-    const yesterdayEnd = new Date(yesterday);
-    yesterdayEnd.setHours(23, 59, 59, 999);
-
-    return state.transactions.some(t => {
-      const txDate = new Date(t.date);
-      return txDate >= yesterday && txDate <= yesterdayEnd;
-    });
-  };
-
-  // Check if there's a journal entry today
-  const hasTodayJournalEntry = () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(today);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    return state.journalEntries.some(entry => {
-      const entryDate = new Date(entry.date);
-      return entryDate >= today && entryDate <= todayEnd;
-    });
-  };
-
-  // Check if habits were logged yesterday
-  const hasYesterdayHabitEntries = () => {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
-    const yesterdayEnd = new Date(yesterday);
-    yesterdayEnd.setHours(23, 59, 59, 999);
-
-    return state.habitEntries.some(entry => {
-      const entryDate = new Date(entry.date);
-      return entryDate >= yesterday && entryDate <= yesterdayEnd;
-    });
-  };
-
-  // Auto-update checklist based on actual data
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    if (checklist.date === today) {
-      const updated: DailyChecklist = {
-        ...checklist,
-        transactionsAdded: checklist.transactionsAdded || hasYesterdayTransactions(),
-        journalEntryAdded: checklist.journalEntryAdded || hasTodayJournalEntry(),
-        habitsLogged: checklist.habitsLogged || hasYesterdayHabitEntries(),
-      };
-      
-      // Only update if something changed
-      if (JSON.stringify(updated) !== JSON.stringify(checklist)) {
-        setChecklist(updated);
-        saveChecklist(updated);
-      }
-    }
-  }, [state.transactions, state.journalEntries, state.habitEntries]);
-
-  const handleNavigateToFinance = async () => {
-    await markAsDone('transactionsAdded');
-    // Navigate to Finance tab
-    navigation.navigate('Finance');
-  };
-
-  const handleNavigateToJournal = async () => {
-    await markAsDone('journalEntryAdded');
-    // Navigate to Journal tab
-    navigation.navigate('Journal');
-  };
-
-  const handleNavigateToHabits = async () => {
-    await markAsDone('habitsLogged');
-    // Navigate to Habits tab
-    navigation.navigate('Habits');
+  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    slideIndexRef.current = index;
+    setSlideIndex(index);
   };
 
   const today = new Date().toLocaleDateString('en-US', { 
@@ -375,187 +282,134 @@ const HomeScreen = () => {
     day: 'numeric' 
   });
 
+  const wellbeing = useMemo(
+    () =>
+      calculateWellbeingScore(
+        state.habits,
+        state.habitEntries,
+        state.journalEntries,
+        state.transactions,
+        state.accounts
+      ),
+    [
+      state.habits,
+      state.habitEntries,
+      state.journalEntries,
+      state.transactions,
+      state.accounts,
+    ]
+  );
+
+  const greeting = getGreeting();
+
   return (
-    <ScrollView 
-      style={styles.container}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-    >
-      <Card style={styles.welcomeCard}>
-        <Card.Content style={styles.welcomeContent}>
-          <Title style={styles.welcomeTitle}>Good Morning! ☀️</Title>
-          <Text style={styles.dateText}>{today}</Text>
-          <Text style={styles.subtitle}>
-            Let's start your day with a quick check-in
-          </Text>
-        </Card.Content>
-      </Card>
+    <View style={styles.container}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.slidesContainer}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+      >
+        {/* Slide 1: Greeting */}
+        <View style={styles.slide}>
+          <View style={styles.slideInner}>
+            <Text style={styles.greetingEmoji}>{greeting.emoji}</Text>
+            <Title style={styles.greetingTitle}>{greeting.text}!</Title>
+            <Text style={styles.greetingTime}>{currentTime}</Text>
+            <Text style={styles.greetingDate}>{today}</Text>
+          </View>
+        </View>
 
-      {/* Notion Highlights & Ideas */}
-      {(notionContent.highlight || notionContent.idea) && (
-        <>
-          {notionContent.highlight && (
-            <Card style={styles.notionCard}>
-              <Card.Content style={styles.notionCardContent}>
-                <View style={styles.notionHeader}>
-                  <Ionicons name="star" size={18} color="#f59e0b" />
-                  <Title style={styles.notionCardTitle}>Today's Highlight</Title>
-                </View>
-                <Text style={styles.notionTitle}>{notionContent.highlight.title}</Text>
-                <Text style={styles.notionContent} numberOfLines={2}>
-                  {notionContent.highlight.content}
-                </Text>
-                <Button
-                  mode="text"
-                  onPress={loadNewHighlight}
-                  style={styles.refreshButton}
-                  labelStyle={styles.refreshButtonLabel}
-                  icon="refresh"
-                  disabled={loadingNotion}
-                  compact
-                >
-                  Get Another
-                </Button>
-              </Card.Content>
-            </Card>
-          )}
+        {/* Slide 2: Wellbeing */}
+        <View style={styles.slide}>
+          <View style={styles.slideInner}>
+            <Ionicons name="heart" size={48} color="#ec4899" style={styles.slideIcon} />
+            <Title style={styles.slideTitle}>Wellbeing</Title>
+            <Text style={styles.wellbeingScoreBig}>{wellbeing.score}%</Text>
+            <Text style={styles.wellbeingBreakdownBig}>
+              Habits {wellbeing.breakdown.habits}% · Journal {wellbeing.breakdown.journal}% · Finance {wellbeing.breakdown.finance}%
+            </Text>
+          </View>
+        </View>
 
-          {notionContent.idea && (
-            <Card style={styles.notionCard}>
-              <Card.Content style={styles.notionCardContent}>
-                <View style={styles.notionHeader}>
-                  <Ionicons name="bulb" size={18} color="#6366f1" />
-                  <Title style={styles.notionCardTitle}>Today's Idea</Title>
-                </View>
-                <Text style={styles.notionTitle}>{notionContent.idea.title}</Text>
-                <Text style={styles.notionContent} numberOfLines={2}>
+        {/* Slide 3: Notion Idea */}
+        <View style={styles.slide}>
+          <View style={styles.slideInner}>
+            <Ionicons name="bulb" size={48} color="#6366f1" style={styles.slideIcon} />
+            <Title style={styles.slideLabel}>Today&apos;s Idea</Title>
+            {notionContent.idea ? (
+              <>
+                <Text style={styles.slideCardTitle}>{notionContent.idea.title}</Text>
+                <Text style={styles.slideCardContent} numberOfLines={6}>
                   {notionContent.idea.content}
                 </Text>
                 <Button
                   mode="text"
                   onPress={loadNewIdea}
-                  style={styles.refreshButton}
-                  labelStyle={styles.refreshButtonLabel}
                   icon="refresh"
                   disabled={loadingNotion}
                   compact
+                  style={styles.slideButton}
+                  labelStyle={styles.slideButtonLabel}
                 >
                   Get Another
                 </Button>
-              </Card.Content>
-            </Card>
-          )}
-        </>
-      )}
-
-      <Card style={styles.checklistCard}>
-        <Card.Content style={styles.checklistContent}>
-          <Title style={styles.checklistTitle}>Daily Checklist</Title>
-          
-          {/* Question 1: Transactions */}
-          <View style={styles.questionContainer}>
-            <View style={styles.questionHeader}>
-              <Checkbox
-                status={checklist.transactionsAdded ? 'checked' : 'unchecked'}
-                onPress={() => markAsDone('transactionsAdded')}
-                color="#6366f1"
-              />
-              <Text
-                style={[
-                  styles.questionText,
-                  checklist.transactionsAdded && styles.questionTextStrikethrough,
-                ]}
-              >
-                1. Did you have any transactions yesterday? If so, please add them here.
-              </Text>
-            </View>
-            {!checklist.transactionsAdded && (
-              <Button
-                mode="contained"
-                onPress={handleNavigateToFinance}
-                style={styles.actionButton}
-                icon="wallet"
-              >
-                Go to Finance
-              </Button>
+              </>
+            ) : (
+              <Text style={styles.slidePlaceholder}>Connect Notion in Settings to see ideas</Text>
             )}
           </View>
+        </View>
 
-          {/* Question 2: Journal */}
-          <View style={styles.questionContainer}>
-            <View style={styles.questionHeader}>
-              <Checkbox
-                status={checklist.journalEntryAdded ? 'checked' : 'unchecked'}
-                onPress={() => markAsDone('journalEntryAdded')}
-                color="#6366f1"
-              />
-              <Text
-                style={[
-                  styles.questionText,
-                  checklist.journalEntryAdded && styles.questionTextStrikethrough,
-                ]}
-              >
-                2. Let's start the day with a journal entry.
-              </Text>
-            </View>
-            {!checklist.journalEntryAdded && (
-              <Button
-                mode="contained"
-                onPress={handleNavigateToJournal}
-                style={styles.actionButton}
-                icon="book"
-              >
-                Go to Journal
-              </Button>
+        {/* Slide 4: Notion Highlight */}
+        <View style={styles.slide}>
+          <View style={styles.slideInner}>
+            <Ionicons name="star" size={48} color="#f59e0b" style={styles.slideIcon} />
+            <Title style={styles.slideLabel}>Today&apos;s Highlight</Title>
+            {notionContent.highlight ? (
+              <>
+                <Text style={styles.slideCardTitle}>{notionContent.highlight.title}</Text>
+                <Text style={styles.slideCardContent} numberOfLines={6}>
+                  {notionContent.highlight.content}
+                </Text>
+                <Button
+                  mode="text"
+                  onPress={loadNewHighlight}
+                  icon="refresh"
+                  disabled={loadingNotion}
+                  compact
+                  style={styles.slideButton}
+                  labelStyle={styles.slideButtonLabel}
+                >
+                  Get Another
+                </Button>
+              </>
+            ) : (
+              <Text style={styles.slidePlaceholder}>Connect Notion in Settings to see highlights</Text>
             )}
           </View>
+        </View>
+      </ScrollView>
 
-          {/* Question 3: Habits */}
-          <View style={styles.questionContainer}>
-            <View style={styles.questionHeader}>
-              <Checkbox
-                status={checklist.habitsLogged ? 'checked' : 'unchecked'}
-                onPress={() => markAsDone('habitsLogged')}
-                color="#6366f1"
-              />
-              <Text
-                style={[
-                  styles.questionText,
-                  checklist.habitsLogged && styles.questionTextStrikethrough,
-                ]}
-              >
-                3. Did you log your habits yesterday? If not, log them in today.
-              </Text>
-            </View>
-            {!checklist.habitsLogged && (
-              <Button
-                mode="contained"
-                onPress={handleNavigateToHabits}
-                style={styles.actionButton}
-                icon="checkmark-circle"
-              >
-                Go to Habits
-              </Button>
-            )}
-          </View>
-        </Card.Content>
-      </Card>
-
-      {/* Completion Message */}
-      {checklist.transactionsAdded && checklist.journalEntryAdded && checklist.habitsLogged && (
-        <Card style={styles.completionCard}>
-          <Card.Content>
-            <View style={styles.completionContent}>
-              <Ionicons name="checkmark-circle" size={32} color="#10b981" />
-              <Title style={styles.completionTitle}>All Done! 🎉</Title>
-              <Text style={styles.completionText}>
-                You've completed your daily checklist. Have a great day!
-              </Text>
-            </View>
-          </Card.Content>
-        </Card>
-      )}
-    </ScrollView>
+      {/* Pagination dots */}
+      <View style={styles.pagination}>
+        {Array.from({ length: SLIDE_COUNT }).map((_, i) => (
+          <View
+            key={i}
+            style={[
+              styles.dot,
+              i === slideIndex && styles.dotActive,
+            ]}
+          />
+        ))}
+      </View>
+    </View>
   );
 };
 
@@ -564,144 +418,114 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
-  welcomeCard: {
-    margin: 10,
-    marginBottom: 6,
-    elevation: 2,
-    backgroundColor: '#6366f1',
+  slidesContainer: {
+    paddingBottom: 16,
   },
-  welcomeTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  dateText: {
-    fontSize: 12,
-    color: '#e0e7ff',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 11,
-    color: '#c7d2fe',
-  },
-  checklistCard: {
-    margin: 10,
-    marginTop: 6,
-    elevation: 2,
-  },
-  checklistTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#1f2937',
-  },
-  questionContainer: {
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  questionHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 6,
-  },
-  questionText: {
+  slide: {
+    width: SCREEN_WIDTH,
     flex: 1,
-    fontSize: 13,
-    color: '#1f2937',
-    marginLeft: 6,
-    lineHeight: 18,
-  },
-  questionTextStrikethrough: {
-    textDecorationLine: 'line-through',
-    color: '#9ca3af',
-  },
-  actionButton: {
-    alignSelf: 'flex-start',
-    marginTop: 4,
-    backgroundColor: '#6366f1',
-    height: 32,
-  },
-  completionCard: {
-    margin: 10,
-    marginTop: 6,
-    elevation: 2,
-    backgroundColor: '#f0fdf4',
-    borderWidth: 2,
-    borderColor: '#10b981',
-  },
-  completionContent: {
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 4,
+    paddingHorizontal: SLIDE_PADDING,
   },
-  completionTitle: {
-    fontSize: 16,
+  slideInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    maxWidth: SCREEN_WIDTH - SLIDE_PADDING * 2,
+  },
+  greetingEmoji: {
+    fontSize: 64,
+    marginBottom: 16,
+  },
+  greetingTitle: {
+    fontSize: 32,
     fontWeight: 'bold',
-    color: '#10b981',
-    marginTop: 6,
-    marginBottom: 4,
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 12,
   },
-  completionText: {
-    fontSize: 12,
+  greetingTime: {
+    fontSize: 28,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  greetingDate: {
+    fontSize: 18,
     color: '#6b7280',
     textAlign: 'center',
   },
-  notionCard: {
-    margin: 10,
-    marginTop: 6,
-    elevation: 2,
+  slideIcon: {
+    marginBottom: 12,
   },
-  notionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  notionCardTitle: {
-    fontSize: 14,
+  slideTitle: {
+    fontSize: 24,
     fontWeight: 'bold',
-    marginLeft: 6,
-    color: '#1f2937',
+    color: '#9d174d',
+    marginBottom: 8,
   },
-  notionTitle: {
-    fontSize: 13,
+  slideLabel: {
+    fontSize: 20,
     fontWeight: '600',
     color: '#374151',
-    marginBottom: 4,
+    marginBottom: 16,
   },
-  notionContent: {
-    fontSize: 11,
+  wellbeingScoreBig: {
+    fontSize: 48,
+    fontWeight: 'bold',
+    color: '#be185d',
+    marginBottom: 12,
+  },
+  wellbeingBreakdownBig: {
+    fontSize: 16,
+    color: '#831843',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  slideCardTitle: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: '#1f2937',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  slideCardContent: {
+    fontSize: 17,
     color: '#4b5563',
-    lineHeight: 16,
-    marginBottom: 6,
+    lineHeight: 26,
+    textAlign: 'center',
+    marginBottom: 16,
   },
-  refreshButton: {
-    alignSelf: 'flex-start',
-    height: 24,
-    marginTop: 0,
-    marginBottom: 0,
+  slideButton: {
+    marginTop: 4,
   },
-  refreshButtonLabel: {
-    fontSize: 11,
-    marginVertical: 0,
-    paddingVertical: 0,
+  slideButtonLabel: {
+    fontSize: 14,
   },
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: 10,
+  slidePlaceholder: {
+    fontSize: 16,
+    color: '#9ca3af',
+    textAlign: 'center',
   },
-  welcomeContent: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+  pagination: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 16,
+    gap: 8,
   },
-  checklistContent: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#d1d5db',
   },
-  notionCardContent: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+  dotActive: {
+    backgroundColor: '#6366f1',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
 });
 

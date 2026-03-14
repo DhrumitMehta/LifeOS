@@ -30,6 +30,7 @@ import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
+import { getDailyAffirmations } from '../constants/affirmations';
 import { JournalEntry, RootStackParamList } from '../types';
 
 type JournalScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Main'>;
@@ -194,12 +195,17 @@ const JournalScreen = () => {
     improveToday: '',
     makeTodayGreat: '',
     yesterdayMood: 'positive' as 'positive' | 'negative',
-    affirmations: '',
     openThoughts: '',
     mood: 'neutral' as 'very-happy' | 'happy' | 'neutral' | 'sad' | 'very-sad',
     tags: [] as string[],
     date: new Date(),
   });
+
+  // Daily affirmations: same day always shows the same couple (from the 30 curated list)
+  const dailyAffirmations = useMemo(
+    () => getDailyAffirmations(formData.date, 2),
+    [formData.date]
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -225,16 +231,18 @@ const JournalScreen = () => {
   }, [navigation, viewMode]);
 
   const handleSave = async () => {
+    const affirmationsText = dailyAffirmations.join('\n\n');
     if (!formData.memorableMoment.trim() && !formData.madeYesterdayBetter.trim() && 
         !formData.improveToday.trim() && !formData.makeTodayGreat.trim() && 
-        !formData.affirmations.trim() && !formData.openThoughts.trim()) {
+        !formData.openThoughts.trim()) {
       return;
     }
 
     try {
       const journalEntry = {
         ...formData,
-        content: `Memorable Moment: ${formData.memorableMoment}\n\nMade Yesterday Better: ${formData.madeYesterdayBetter}\n\nImprove Today: ${formData.improveToday}\n\nMake Today Great: ${formData.makeTodayGreat}\n\nYesterday's Mood: ${formData.yesterdayMood}\n\nAffirmations: ${formData.affirmations}\n\nOpen Thoughts: ${formData.openThoughts}`,
+        affirmations: affirmationsText,
+        content: `Memorable Moment: ${formData.memorableMoment}\n\nMade Yesterday Better: ${formData.madeYesterdayBetter}\n\nImprove Today: ${formData.improveToday}\n\nMake Today Great: ${formData.makeTodayGreat}\n\nYesterday's Mood: ${formData.yesterdayMood}\n\nAffirmations: ${affirmationsText}\n\nOpen Thoughts: ${formData.openThoughts}`,
       };
       
       await addJournalEntry(journalEntry);
@@ -247,7 +255,6 @@ const JournalScreen = () => {
         improveToday: '',
         makeTodayGreat: '',
         yesterdayMood: 'positive',
-        affirmations: '',
         openThoughts: '',
         mood: 'neutral',
         tags: [],
@@ -786,19 +793,22 @@ const JournalScreen = () => {
               />
           </View>
 
+            {/* Daily affirmations (from curated list, a couple per day) */}
+            <View style={styles.section}>
+              <Title style={styles.subsectionTitle}>Today&apos;s affirmations</Title>
+              <Paragraph style={styles.affirmationsIntro}>
+                A couple of affirmations for today — they&apos;ll be saved with your entry.
+              </Paragraph>
+              {dailyAffirmations.map((line, idx) => (
+                <View key={idx} style={styles.affirmationChip}>
+                  <Text style={styles.affirmationText}>✨ {line}</Text>
+                </View>
+              ))}
+            </View>
+
             {/* Open Writing Section */}
             <View style={styles.section}>
               <Title style={styles.subsectionTitle}>Open Writing</Title>
-              
-              <TextInput
-                label="Affirmations for the day"
-                value={formData.affirmations}
-                onChangeText={(text) => setFormData({ ...formData, affirmations: text })}
-                multiline
-                numberOfLines={4}
-                style={styles.input}
-                placeholder="Write positive affirmations to start your day..."
-              />
               
               <TextInput
                 label="Any and all thoughts"
@@ -1094,6 +1104,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 16,
     color: '#374151',
+  },
+  affirmationsIntro: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 12,
+  },
+  affirmationChip: {
+    backgroundColor: '#f0fdf4',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#22c55e',
+  },
+  affirmationText: {
+    fontSize: 15,
+    color: '#166534',
+    lineHeight: 22,
   },
   dateText: {
     fontSize: 14,

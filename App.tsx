@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, Platform, View, StyleSheet } from 'react-native';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -109,34 +109,29 @@ const TabNavigator = ({ onMenuPress }: { onMenuPress: () => void }) => {
 };
 
 const AppContent = () => {
-  const notificationListener = useRef<Notifications.Subscription>();
-  const responseListener = useRef<Notifications.Subscription>();
+  const notificationListener = useRef<Notifications.Subscription | undefined>(undefined);
+  const responseListener = useRef<Notifications.Subscription | undefined>(undefined);
   const [showNotionModal, setShowNotionModal] = useState(false);
   const [notionChecked, setNotionChecked] = useState(false);
   const [showMenuDrawer, setShowMenuDrawer] = useState(false);
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
 
   useEffect(() => {
-    // Register for push notifications
-    registerForPushNotificationsAsync();
+    // Notifications only on native (not on web)
+    if (Platform.OS !== 'web') {
+      registerForPushNotificationsAsync();
+      notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+        console.log('Notification received:', notification);
+      });
+      responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+        console.log('Notification response:', response);
+      });
+    }
 
-    // Listen for notifications received while app is foregrounded
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification received:', notification);
-    });
-
-    // Listen for user interactions with notifications
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Notification response:', response);
-    });
-
-    // Check Notion connection on app start
     checkNotionConnection();
 
-    // Set up app state listener to sync when app comes to foreground
     const subscription = AppState.addEventListener('change', async (nextAppState) => {
       if (nextAppState === 'active') {
-        // App has come to the foreground, try to sync pending operations
         const { offlineSync } = await import('./src/services/offlineSync');
         await offlineSync.syncPendingOperations();
       }
@@ -191,7 +186,7 @@ const AppContent = () => {
 
   return (
     <>
-      <NotificationScheduler />
+      {Platform.OS !== 'web' && <NotificationScheduler />}
       {notionChecked && (
         <NotionConnectionModal
           visible={showNotionModal}
@@ -200,6 +195,7 @@ const AppContent = () => {
         />
       )}
       <NavigationContainer ref={navigationRef}>
+        <View style={[styles.appContainer, Platform.OS === 'web' && styles.appContainerWeb]}>
         <Stack.Navigator
           screenOptions={{
             headerStyle: {
@@ -263,16 +259,28 @@ const AppContent = () => {
             options={{ title: 'Budget' }}
           />
         </Stack.Navigator>
+        </View>
       </NavigationContainer>
       <MenuDrawer 
         visible={showMenuDrawer} 
         onClose={() => setShowMenuDrawer(false)}
-        navigationRef={navigationRef}
+        navigationRef={navigationRef as React.RefObject<NavigationContainerRef<RootStackParamList>>}
       />
       <StatusBar style="light" />
     </>
   );
 };
+
+const styles = StyleSheet.create({
+  appContainer: {
+    flex: 1,
+  },
+  appContainerWeb: {
+    maxWidth: 1024,
+    width: '100%',
+    alignSelf: 'center',
+  },
+});
 
 const App = () => {
   return (

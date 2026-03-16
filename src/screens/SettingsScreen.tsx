@@ -37,9 +37,20 @@ import {
   extractPageTitle,
 } from '../services/notion';
 import { useApp } from '../context/AppContext';
+import { Habit } from '../types';
+
+const defaultNewHabit = {
+  name: '',
+  description: '',
+  category: 'Health',
+  habitType: 'boolean' as 'boolean' | 'numeric',
+  targetValue: 1,
+  maxValue: 10,
+  unit: 'times',
+};
 
 const SettingsScreen = () => {
-  const { state, refreshData, addCategory, updateCategory, deleteCategory } = useApp();
+  const { state, refreshData, addCategory, updateCategory, deleteCategory, addHabit, deleteHabit } = useApp();
   const [refreshing, setRefreshing] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [categoryType, setCategoryType] = useState<'income' | 'expense'>('income');
@@ -54,6 +65,10 @@ const SettingsScreen = () => {
   const [notionBotInfo, setNotionBotInfo] = useState<any>(null);
   const [notionJournalContent, setNotionJournalContent] = useState<string>('');
   const [loadingJournal, setLoadingJournal] = useState(false);
+
+  // Habits management
+  const [showHabitModal, setShowHabitModal] = useState(false);
+  const [newHabit, setNewHabit] = useState(defaultNewHabit);
 
   const handleExportData = () => {
     Alert.alert(
@@ -360,6 +375,68 @@ const SettingsScreen = () => {
               <Text style={styles.statLabel}>Budgets</Text>
             </View>
           </View>
+        </Card.Content>
+      </Card>
+
+      {/* Habits – add/delete */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Title style={styles.cardTitle}>Habits</Title>
+          <Text style={styles.descriptionText}>
+            Add or remove habits. Changes appear on the Habits screen.
+          </Text>
+          <Divider style={styles.divider} />
+          {state.habits.filter(h => h.isActive).map((habit: Habit) => (
+            <View key={habit.id} style={styles.habitItem}>
+              <View style={styles.habitItemText}>
+                <Text style={styles.habitItemName}>{habit.name}</Text>
+                <Text style={styles.habitItemType}>
+                  {habit.habitType === 'numeric' ? 'Numeric' : 'Yes/No'}
+                  {habit.category ? ` · ${habit.category}` : ''}
+                </Text>
+              </View>
+              <IconButton
+                icon="delete-outline"
+                size={22}
+                iconColor="#ef4444"
+                onPress={() => {
+                  Alert.alert(
+                    'Delete Habit',
+                    `Delete "${habit.name}"? This will also remove all its history.`,
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: async () => {
+                          try {
+                            await deleteHabit(habit.id);
+                            Alert.alert('Done', 'Habit deleted');
+                          } catch (e) {
+                            Alert.alert('Error', 'Failed to delete habit');
+                          }
+                        },
+                      },
+                    ]
+                  );
+                }}
+              />
+            </View>
+          ))}
+          {state.habits.filter(h => h.isActive).length === 0 && (
+            <Text style={styles.emptyText}>No habits yet. Add one below.</Text>
+          )}
+          <Button
+            mode="contained"
+            onPress={() => {
+              setNewHabit(defaultNewHabit);
+              setShowHabitModal(true);
+            }}
+            style={styles.testButton}
+            icon="plus"
+          >
+            Add habit
+          </Button>
         </Card.Content>
       </Card>
 
@@ -692,6 +769,131 @@ const SettingsScreen = () => {
       </Card>
 
       <View style={styles.bottomSpacing} />
+
+      {/* Add Habit Modal */}
+      <Modal
+        visible={showHabitModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => { setShowHabitModal(false); setNewHabit(defaultNewHabit); }}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Title style={styles.modalTitle}>Add Habit</Title>
+            <IconButton
+              icon="close"
+              size={24}
+              onPress={() => { setShowHabitModal(false); setNewHabit(defaultNewHabit); }}
+            />
+          </View>
+          <ScrollView style={styles.modalContent}>
+            <Card style={styles.formCard}>
+              <Card.Content>
+                <TextInput
+                  label="Habit Name"
+                  value={newHabit.name}
+                  onChangeText={(text) => setNewHabit({ ...newHabit, name: text })}
+                  mode="outlined"
+                  style={styles.categoryInput}
+                />
+                <TextInput
+                  label="Description (optional)"
+                  value={newHabit.description}
+                  onChangeText={(text) => setNewHabit({ ...newHabit, description: text })}
+                  mode="outlined"
+                  style={styles.categoryInput}
+                  multiline
+                />
+                <TextInput
+                  label="Category"
+                  value={newHabit.category}
+                  onChangeText={(text) => setNewHabit({ ...newHabit, category: text })}
+                  mode="outlined"
+                  style={styles.categoryInput}
+                />
+                <Text style={[styles.formTitle, { marginTop: 8 }]}>Type</Text>
+                <SegmentedButtons
+                  value={newHabit.habitType}
+                  onValueChange={(v) => setNewHabit({ ...newHabit, habitType: v as 'boolean' | 'numeric' })}
+                  buttons={[
+                    { value: 'boolean', label: 'Yes/No' },
+                    { value: 'numeric', label: 'Numeric' },
+                  ]}
+                  style={styles.segmentedButtons}
+                />
+                <View style={styles.formRow}>
+                  {newHabit.habitType === 'boolean' ? (
+                    <TextInput
+                      label="Target"
+                      value={newHabit.targetValue.toString()}
+                      onChangeText={(t) => setNewHabit({ ...newHabit, targetValue: parseInt(t, 10) || 1 })}
+                      keyboardType="numeric"
+                      mode="outlined"
+                      style={[styles.categoryInput, { flex: 1 }]}
+                    />
+                  ) : (
+                    <TextInput
+                      label="Max value"
+                      value={newHabit.maxValue.toString()}
+                      onChangeText={(t) => setNewHabit({ ...newHabit, maxValue: parseInt(t, 10) || 10 })}
+                      keyboardType="numeric"
+                      mode="outlined"
+                      style={[styles.categoryInput, { flex: 1 }]}
+                    />
+                  )}
+                  <TextInput
+                    label="Unit"
+                    value={newHabit.unit}
+                    onChangeText={(t) => setNewHabit({ ...newHabit, unit: t })}
+                    mode="outlined"
+                    style={[styles.categoryInput, { flex: 1 }]}
+                  />
+                </View>
+                <View style={styles.formButtons}>
+                  <Button mode="outlined" onPress={() => { setShowHabitModal(false); setNewHabit(defaultNewHabit); }} style={styles.cancelButton}>
+                    Cancel
+                  </Button>
+                  <Button
+                    mode="contained"
+                    onPress={async () => {
+                      if (!newHabit.name.trim()) {
+                        Alert.alert('Error', 'Enter a habit name');
+                        return;
+                      }
+                      try {
+                        await addHabit({
+                          name: newHabit.name.trim(),
+                          description: newHabit.description.trim(),
+                          category: newHabit.category,
+                          frequency: 'daily',
+                          habitType: newHabit.habitType,
+                          targetValue: newHabit.targetValue,
+                          maxValue: newHabit.habitType === 'numeric' ? newHabit.maxValue : undefined,
+                          unit: newHabit.unit,
+                          color: '#3b82f6',
+                          icon: 'check',
+                          isActive: true,
+                          notificationTime: undefined,
+                          notificationsEnabled: false,
+                        });
+                        setShowHabitModal(false);
+                        setNewHabit(defaultNewHabit);
+                        Alert.alert('Done', 'Habit added. It will appear on the Habits screen.');
+                      } catch (e) {
+                        Alert.alert('Error', 'Failed to add habit');
+                      }
+                    }}
+                    disabled={!newHabit.name.trim()}
+                    style={styles.saveButton}
+                  >
+                    Add
+                  </Button>
+                </View>
+              </Card.Content>
+            </Card>
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Category Management Modal */}
       <Modal
@@ -1027,6 +1229,33 @@ const styles = StyleSheet.create({
   },
   categoryActions: {
     flexDirection: 'row',
+  },
+  habitItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+  },
+  habitItemText: {
+    flex: 1,
+  },
+  habitItemName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  habitItemType: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  formRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
   },
   emptyText: {
     textAlign: 'center',

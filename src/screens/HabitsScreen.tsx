@@ -2,14 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   StyleSheet,
-  FlatList,
   TouchableOpacity,
   Alert,
   ScrollView,
   Dimensions,
   RefreshControl,
-  Animated,
-  PanResponder,
 } from 'react-native';
 import {
   Card,
@@ -31,18 +28,13 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
 import { Habit, RootStackParamList } from '../types';
 
 type HabitsScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Main'>;
 
-interface WeeklyTask {
-  id: string;
-  text: string;
-  completed: boolean;
-  weekStartDate: string; // ISO string of Monday of the week
-}
+const LAST_N_DAYS = 10;
+const HISTORY_DAYS = 14;
 
 const HabitsScreen = () => {
   const navigation = useNavigation<HabitsScreenNavigationProp>();
@@ -54,12 +46,7 @@ const HabitsScreen = () => {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [numericValues, setNumericValues] = useState<{[key: string]: string}>({});
-  const [weeklyTasks, setWeeklyTasks] = useState<WeeklyTask[]>([]);
-  const [newTaskText, setNewTaskText] = useState('');
-  const [showAddTaskDialog, setShowAddTaskDialog] = useState(false);
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const taskPositions = useRef<{ [key: string]: number }>({});
+  const [celebrationMessage, setCelebrationMessage] = useState<string | null>(null);
 
   // Load existing numeric values from habit entries
   React.useEffect(() => {
@@ -92,205 +79,39 @@ const HabitsScreen = () => {
     unit: 'times',
   });
 
-  // Get the Monday of the current week
-  const getWeekStartDate = (date: Date = new Date()): Date => {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-    const monday = new Date(d.setDate(diff));
-    monday.setHours(0, 0, 0, 0);
-    return monday;
+  // Last N days: for boolean habits, count days done; for numeric, average value
+  const getLast10DaysDoneCount = (habit: Habit): number => {
+    let count = 0;
+    for (let i = 0; i < LAST_N_DAYS; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      const dateStr = d.toISOString().split('T')[0];
+      const done = state.habitEntries.some(e =>
+        e.habitId === habit.id && e.date.toISOString().split('T')[0] === dateStr && (habit.habitType === 'boolean' ? e.completed : true)
+      );
+      if (done) count++;
+    }
+    return count;
   };
 
-  // Generate current week (Monday to Sunday, or Sunday-Saturday if it's Monday)
-  const getCurrentWeek = () => {
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, etc.
-    
-    // If it's Monday, show Sunday through Sunday (previous Sunday + Mon-Sun)
-    if (dayOfWeek === 1) {
-      const sunday = new Date(today);
-      sunday.setDate(today.getDate() - 1); // Previous Sunday (yesterday)
-      
-      const days = [];
-      for (let i = 0; i < 8; i++) {
-        const date = new Date(sunday);
-        date.setDate(sunday.getDate() + i);
-        days.push(date);
+  const getLast10DaysNumericAvg = (habit: Habit): number => {
+    let sum = 0;
+    let daysWithEntry = 0;
+    for (let i = 0; i < LAST_N_DAYS; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      const dateStr = d.toISOString().split('T')[0];
+      const entry = state.habitEntries.find(e =>
+        e.habitId === habit.id && e.date.toISOString().split('T')[0] === dateStr
+      );
+      if (entry) {
+        sum += entry.value;
+        daysWithEntry++;
       }
-      return days;
     }
-    
-    // Otherwise show Monday to Sunday
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Adjust for Monday start
-    
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + mondayOffset);
-    
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const date = new Date(monday);
-      date.setDate(monday.getDate() + i);
-      days.push(date);
-    }
-    return days;
-  };
-
-  const currentWeek = getCurrentWeek();
-
-  // Load weekly tasks
-  useEffect(() => {
-    loadWeeklyTasks();
-  }, []);
-
-  const loadWeeklyTasks = async () => {
-    try {
-      const currentWeekStart = getWeekStartDate();
-      const currentWeekStartStr = currentWeekStart.toISOString().split('T')[0];
-      
-      const stored = await AsyncStorage.getItem('weeklyTasks');
-      if (stored) {
-        const allTasks: WeeklyTask[] = JSON.parse(stored);
-        // Filter tasks for current week and remove old week tasks
-        const currentWeekTasks = allTasks.filter(task => task.weekStartDate === currentWeekStartStr);
-        
-        // If we have tasks from a different week, clear them and save
-        if (currentWeekTasks.length !== allTasks.length) {
-          await AsyncStorage.setItem('weeklyTasks', JSON.stringify(currentWeekTasks));
-        }
-        
-        setWeeklyTasks(currentWeekTasks);
-      } else {
-        setWeeklyTasks([]);
-      }
-    } catch (error) {
-      console.error('Error loading weekly tasks:', error);
-      setWeeklyTasks([]);
-    }
-  };
-
-  const saveWeeklyTasks = async (tasks: WeeklyTask[]) => {
-    try {
-      await AsyncStorage.setItem('weeklyTasks', JSON.stringify(tasks));
-      setWeeklyTasks(tasks);
-    } catch (error) {
-      console.error('Error saving weekly tasks:', error);
-    }
-  };
-
-  const handleAddTask = () => {
-    if (!newTaskText.trim()) {
-      return;
-    }
-    
-    const currentWeekStart = getWeekStartDate();
-    const currentWeekStartStr = currentWeekStart.toISOString().split('T')[0];
-    
-    const newTask: WeeklyTask = {
-      id: Date.now().toString(),
-      text: newTaskText.trim(),
-      completed: false,
-      weekStartDate: currentWeekStartStr,
-    };
-    
-    const updatedTasks = [...weeklyTasks, newTask];
-    saveWeeklyTasks(updatedTasks);
-    setNewTaskText('');
-    setShowAddTaskDialog(false);
-  };
-
-  const handleToggleTask = (taskId: string) => {
-    const updatedTasks = weeklyTasks.map(task =>
-      task.id === taskId ? { ...task, completed: !task.completed } : task
-    );
-    saveWeeklyTasks(updatedTasks);
-  };
-
-  const handleDeleteTask = (taskId: string) => {
-    const task = weeklyTasks.find(t => t.id === taskId);
-    Alert.alert(
-      'Delete Task',
-      `Are you sure you want to delete "${task?.text}"?`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            const updatedTasks = weeklyTasks.filter(task => task.id !== taskId);
-            saveWeeklyTasks(updatedTasks);
-          },
-        },
-      ]
-    );
-  };
-
-  const handleLongPress = (index: number) => {
-    setDraggingIndex(index);
-    dragY.setValue(0);
-  };
-
-  const handleMoveUp = (index: number) => {
-    if (index === 0) return;
-    const newTasks = [...weeklyTasks];
-    const temp = newTasks[index];
-    newTasks[index] = newTasks[index - 1];
-    newTasks[index - 1] = temp;
-    setWeeklyTasks(newTasks);
-    saveWeeklyTasks(newTasks);
-    setDraggingIndex(index - 1);
-  };
-
-  const handleMoveDown = (index: number) => {
-    if (index === weeklyTasks.length - 1) return;
-    const newTasks = [...weeklyTasks];
-    const temp = newTasks[index];
-    newTasks[index] = newTasks[index + 1];
-    newTasks[index + 1] = temp;
-    setWeeklyTasks(newTasks);
-    saveWeeklyTasks(newTasks);
-    setDraggingIndex(index + 1);
-  };
-
-  const createPanResponder = (index: number) => {
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        return draggingIndex === index && Math.abs(gestureState.dy) > 10;
-      },
-      onPanResponderGrant: () => {
-        dragY.setValue(0);
-      },
-      onPanResponderMove: (_, gestureState) => {
-        if (draggingIndex === index) {
-          dragY.setValue(gestureState.dy);
-          
-          // Calculate which position we're hovering over
-          const itemHeight = 50; // Approximate height of each task item
-          const currentPosition = index;
-          const newPosition = Math.round((gestureState.dy + currentPosition * itemHeight) / itemHeight);
-          
-          if (newPosition >= 0 && newPosition < weeklyTasks.length && newPosition !== currentPosition) {
-            // Reorder items
-            const newTasks = [...weeklyTasks];
-            const [movedItem] = newTasks.splice(currentPosition, 1);
-            newTasks.splice(newPosition, 0, movedItem);
-            setWeeklyTasks(newTasks);
-            setDraggingIndex(newPosition);
-          }
-        }
-      },
-      onPanResponderRelease: () => {
-        if (draggingIndex !== null) {
-          saveWeeklyTasks(weeklyTasks);
-          setDraggingIndex(null);
-          dragY.setValue(0);
-        }
-      },
-    });
+    return daysWithEntry > 0 ? sum / daysWithEntry : 0;
   };
 
   // Check if a habit is completed on a specific date
@@ -434,11 +255,61 @@ const HabitsScreen = () => {
     setRefreshing(true);
     try {
       await refreshData();
-      await loadWeeklyTasks(); // Reload weekly tasks to clear old week's tasks
     } catch (error) {
       console.error('Error refreshing data:', error);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const completeHabitForDate = async (habit: Habit, date: Date) => {
+    const dateStr = date.toISOString().split('T')[0];
+    const existing = state.habitEntries.find(e =>
+      e.habitId === habit.id && e.date.toISOString().split('T')[0] === dateStr
+    );
+    if (existing && habit.habitType === 'boolean') {
+      Alert.alert(
+        'Already done',
+        'Undo this completion?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Undo', style: 'destructive', onPress: async () => {
+            try {
+              await deleteHabitEntry(existing!.id);
+            } catch (err) {
+              console.error('Error undoing habit:', err);
+              Alert.alert('Error', 'Could not undo completion');
+            }
+          } },
+        ]
+      );
+      return;
+    }
+    if (habit.habitType === 'boolean') {
+      await addHabitEntry({
+        habitId: habit.id,
+        date,
+        value: habit.targetValue,
+        completed: true,
+      });
+      if (date.toDateString() === new Date().toDateString()) {
+        const streak = getHabitStreak(habit);
+        const messages = streak >= 7 ? ['On fire! 🔥'] : streak >= 3 ? ['Streak +1! 🔥'] : ['Done! ✓'];
+        setCelebrationMessage(messages[0]);
+        setTimeout(() => setCelebrationMessage(null), 2000);
+      }
+    } else {
+      setSelectedHabit(habit);
+      setSelectedDate(date);
+      const entry = state.habitEntries.find(e => e.habitId === habit.id && e.date.toISOString().split('T')[0] === dateStr);
+      const currentValue = entry ? entry.value : 0;
+      if (habit.unit.toLowerCase().includes('hour')) {
+        setTempHours(Math.floor(currentValue));
+        setTempMinutes(Math.round((currentValue % 1) * 60));
+      }
+      setTempNumericValue(currentValue);
+      setNumericValues(prev => ({ ...prev, [`${habit.id}-${dateStr}`]: currentValue.toString() }));
+      setShowNumericDialog(true);
     }
   };
 
@@ -489,36 +360,6 @@ const HabitsScreen = () => {
 
   const handleHabitPress = (habit: Habit) => {
     navigation.navigate('HabitDetail', { habitId: habit.id });
-  };
-
-  const handleQuickComplete = async (habit: Habit) => {
-    try {
-      console.log('Attempting to complete habit:', habit.name);
-      const today = new Date().toISOString().split('T')[0];
-      const existingEntry = state.habitEntries.find(
-        entry => entry.habitId === habit.id && entry.date.toISOString().split('T')[0] === today
-      );
-
-      if (existingEntry) {
-        console.log('Habit already completed today');
-        Alert.alert('Already Completed', 'This habit has already been completed today.');
-        return;
-      }
-
-      console.log('Adding habit entry...');
-      await addHabitEntry({
-        habitId: habit.id,
-        date: new Date(),
-        value: habit.targetValue,
-        completed: true,
-      });
-
-      console.log('Habit entry added successfully');
-      Alert.alert('Success', `${habit.name} marked as completed!`);
-    } catch (error) {
-      console.error('Error completing habit:', error);
-      Alert.alert('Error', 'Failed to complete habit');
-    }
   };
 
   const handleDeleteHabit = (habit: Habit) => {
@@ -586,144 +427,6 @@ const HabitsScreen = () => {
     return Math.round((completedEntries.length / entries.length) * 100);
   };
 
-  // Render the checkbox grid header
-  const renderGridHeader = () => (
-    <View style={styles.gridHeader}>
-      <View style={styles.dateColumn}>
-        <Text style={styles.headerText}>Date</Text>
-      </View>
-      {state.habits
-        .filter(habit => habit.isActive)
-        .sort((a, b) => {
-          // Boolean habits first, then numeric habits
-          if (a.habitType === 'boolean' && b.habitType === 'numeric') return -1;
-          if (a.habitType === 'numeric' && b.habitType === 'boolean') return 1;
-          return 0;
-        })
-        .map(habit => (
-        <TouchableOpacity 
-          key={habit.id} 
-          style={styles.habitColumn}
-          onPress={() => handleHabitClick(habit)}
-        >
-          <Text style={[styles.headerText, { textDecorationLine: 'underline' }]} numberOfLines={2}>
-            {habit.name}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-
-  // Render a row for each day
-  const renderDayRow = (date: Date) => {
-    const today = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
-    
-    const isToday = date.toDateString() === today.toDateString();
-    const isYesterday = date.toDateString() === yesterday.toDateString();
-
-    return (
-      <View key={date.toISOString()} style={[styles.dayRow, isToday && styles.todayRow, isYesterday && styles.yesterdayRow]}>
-        <View style={[styles.dateColumn, isToday && styles.todayDateColumn, isYesterday && styles.yesterdayDateColumn]}>
-          <Text style={[styles.dateText, isToday && styles.todayDateText, isYesterday && styles.yesterdayDateText]}>
-            {date.toLocaleDateString('en-US', { weekday: 'short' })}
-          </Text>
-          <Text style={[styles.dateNumber, isToday && styles.todayDateNumber, isYesterday && styles.yesterdayDateNumber]}>
-            {date.getDate()}
-          </Text>
-          {isYesterday && (
-            <Text style={styles.yesterdayLabel}>Yesterday</Text>
-          )}
-            </View>
-        {state.habits
-          .filter(habit => habit.isActive)
-          .sort((a, b) => {
-            // Boolean habits first, then numeric habits
-            if (a.habitType === 'boolean' && b.habitType === 'numeric') return -1;
-            if (a.habitType === 'numeric' && b.habitType === 'boolean') return 1;
-            return 0;
-          })
-          .map(habit => (
-          <View key={habit.id} style={[styles.habitColumn, isToday && styles.todayHabitColumn]}>
-            {habit.habitType === 'boolean' ? (
-              <Checkbox
-                status={isHabitCompletedOnDate(habit.id, date) ? 'checked' : 'unchecked'}
-                onPress={() => handleHabitToggle(habit, date)}
-                color={habit.color}
-              />
-            ) : (
-              <TouchableOpacity 
-                style={[
-                  styles.numericDisplayContainer,
-                  (() => {
-                    const today = new Date();
-                    const yesterday = new Date();
-                    yesterday.setDate(today.getDate() - 1);
-                    const isToday = date.toDateString() === today.toDateString();
-                    const isYesterday = date.toDateString() === yesterday.toDateString();
-                    return !(isToday || isYesterday);
-                  })() && styles.numericDisplayDisabled
-                ]}
-                onPress={() => {
-                  const today = new Date();
-                  const yesterday = new Date();
-                  yesterday.setDate(today.getDate() - 1);
-                  
-                  const isToday = date.toDateString() === today.toDateString();
-                  const isYesterday = date.toDateString() === yesterday.toDateString();
-                  const isEditable = isToday || isYesterday;
-                  
-                  if (!isEditable) {
-                    Alert.alert('Cannot Modify', 'You can only edit numeric habits for today and yesterday.');
-                    return;
-                  }
-                  setSelectedHabit(habit);
-                  setSelectedDate(date);
-                  const key = `${habit.id}-${date.toISOString().split('T')[0]}`;
-                  const currentValue = parseFloat(numericValues[key] || 
-                    (() => {
-                      const entry = state.habitEntries.find(
-                        e => e.habitId === habit.id && 
-                        e.date.toDateString() === date.toDateString()
-                      );
-                      return entry ? entry.value.toString() : '0';
-                    })());
-                  
-                  if (habit.unit.toLowerCase().includes('hour')) {
-                    // Convert decimal hours to hours and minutes
-                    const totalHours = currentValue;
-                    const hours = Math.floor(totalHours);
-                    const minutes = Math.round((totalHours - hours) * 60);
-                    setTempHours(hours);
-                    setTempMinutes(Math.round(minutes / 10) * 10); // Round to nearest 10
-                    setTempNumericValue(currentValue);
-                  } else {
-                    setTempNumericValue(currentValue);
-                  }
-                  
-                  setShowNumericDialog(true);
-                }}
-              >
-                <Text style={[styles.numericDisplayValue, { color: habit.color }]}>
-                  {numericValues[`${habit.id}-${date.toISOString().split('T')[0]}`] || 
-                   (() => {
-                     const entry = state.habitEntries.find(
-                       e => e.habitId === habit.id && 
-                       e.date.toDateString() === date.toDateString()
-                     );
-                     return entry ? entry.value.toString() : '0';
-                   })()}
-                </Text>
-                <Text style={styles.numericDisplayUnit}>{habit.unit}</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        ))}
-      </View>
-    );
-  };
-
   if (state.isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -732,8 +435,30 @@ const HabitsScreen = () => {
     );
   }
 
+  const activeHabits = state.habits.filter(h => h.isActive);
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const todayDoneCount = activeHabits.filter(h =>
+    state.habitEntries.some(e => e.habitId === h.id && e.date.toISOString().split('T')[0] === todayStr && (h.habitType === 'boolean' ? e.completed : true))
+  ).length;
+  const todayProgress = activeHabits.length ? Math.round((todayDoneCount / activeHabits.length) * 100) : 0;
+
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const yesterdayDoneCount = activeHabits.filter(h =>
+    state.habitEntries.some(e => e.habitId === h.id && e.date.toISOString().split('T')[0] === yesterdayStr && (h.habitType === 'boolean' ? e.completed : true))
+  ).length;
+
+  const screenWidth = Dimensions.get('window').width;
+
   return (
     <View style={styles.container}>
+      {celebrationMessage ? (
+        <View style={styles.celebrationToast}>
+          <Text style={styles.celebrationText}>{celebrationMessage}</Text>
+        </View>
+      ) : null}
       <ScrollView
         style={styles.scrollContainer}
         refreshControl={
@@ -741,112 +466,192 @@ const HabitsScreen = () => {
         }
         showsVerticalScrollIndicator={true}
       >
-        {/* Weekly Tasks Section */}
-        <Card style={styles.weeklyTasksCard}>
-          <Card.Content>
-            <View style={styles.weeklyTasksHeader}>
-              <Title style={styles.weeklyTasksTitle} numberOfLines={2}>Things to Accomplish this Week</Title>
-              <IconButton
-                icon="plus"
-                size={20}
-                onPress={() => setShowAddTaskDialog(true)}
-                iconColor="#6366f1"
-              />
+        {/* Today / Yesterday – one slot, swipe left-right */}
+        {activeHabits.length > 0 && (
+          <ScrollView
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            style={styles.todayYesterdayScroll}
+            contentContainerStyle={styles.todayYesterdayContent}
+          >
+            {/* Today page */}
+            <View style={[styles.todayYesterdayPage, { width: screenWidth }]}>
+              <Card style={styles.todayCard}>
+                <Card.Content>
+                  <View style={styles.todayHeader}>
+                    <Text style={styles.todayTitle}>Today</Text>
+                    <Text style={styles.todaySubtitle}>
+                      {today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                    </Text>
+                  </View>
+                  <View style={styles.todayProgressRow}>
+                    <View style={styles.todayProgressRing}>
+                      <Text style={styles.todayProgressCount}>{todayDoneCount}</Text>
+                      <Text style={styles.todayProgressOf}>/ {activeHabits.length}</Text>
+                    </View>
+                    <ProgressBar progress={todayDoneCount / Math.max(activeHabits.length, 1)} color="#10b981" style={styles.todayProgressBar} />
+                    <Text style={styles.todayProgressPct}>{todayProgress}%</Text>
+                  </View>
+                  <Text style={styles.todayTapHint}>Tap to complete</Text>
+                  <View style={styles.todayHabitCards}>
+                      {activeHabits.map(habit => {
+                        const done = state.habitEntries.some(e =>
+                          e.habitId === habit.id && e.date.toISOString().split('T')[0] === todayStr && (habit.habitType === 'boolean' ? e.completed : true)
+                        );
+                        const streak = getHabitStreak(habit);
+                        return (
+                          <TouchableOpacity
+                            key={habit.id}
+                            style={[styles.todayHabitCard, done && styles.todayHabitCardDone]}
+                            onPress={() => completeHabitForDate(habit, today)}
+                            activeOpacity={0.8}
+                          >
+                            <View style={[styles.todayHabitIconWrap, { backgroundColor: (habit.color || '#6366f1') + '22' }]}>
+                              <Ionicons name="checkmark-circle" size={28} color={done ? '#10b981' : (habit.color || '#6366f1')} />
+                            </View>
+                            <View style={styles.todayHabitContent}>
+                              <Text style={[styles.todayHabitName, done && styles.todayHabitNameDone]} numberOfLines={2}>
+                                {habit.name}
+                              </Text>
+                              {habit.habitType === 'numeric' && (
+                                <Text style={styles.todayHabitUnit}>
+                                  {numericValues[`${habit.id}-${todayStr}`] || (state.habitEntries.find(e => e.habitId === habit.id && e.date.toISOString().split('T')[0] === todayStr)?.value ?? 0)} {habit.unit}
+                                </Text>
+                              )}
+                              <Text style={styles.todayLast10}>
+                                {habit.habitType === 'boolean'
+                                  ? `Last ${LAST_N_DAYS} days: ${getLast10DaysDoneCount(habit)}/${LAST_N_DAYS}`
+                                  : `Avg (${LAST_N_DAYS}d): ${getLast10DaysNumericAvg(habit).toFixed(1)} ${habit.unit}`}
+                              </Text>
+                              {streak > 0 && (
+                                <View style={styles.todayStreakBadge}>
+                                  <Ionicons name="flame" size={14} color="#f59e0b" />
+                                  <Text style={styles.todayStreakText}>{streak}</Text>
+                                </View>
+                              )}
+                            </View>
+                            {done && <Ionicons name="checkmark-done" size={24} color="#10b981" style={styles.todayHabitCheck} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                  </View>
+                </Card.Content>
+              </Card>
             </View>
-            {weeklyTasks.length === 0 ? (
-              <Text style={styles.emptyTasksText}>No tasks for this week. Add one to get started!</Text>
-            ) : (
-              weeklyTasks.map((task, index) => {
-                const isDragging = draggingIndex === index;
-                const panResponder = createPanResponder(index);
-                
-                return (
-                  <Animated.View
-                    key={task.id}
-                    style={[
-                      styles.taskRow,
-                      isDragging && styles.taskRowDragging,
-                      isDragging && {
-                        transform: [{ translateY: dragY }],
-                        zIndex: 1000,
-                        elevation: 8,
-                      },
-                    ]}
-                    {...(isDragging ? panResponder.panHandlers : {})}
-                  >
-                    <TouchableOpacity
-                      onLongPress={() => handleLongPress(index)}
-                      delayLongPress={500}
-                      activeOpacity={0.7}
-                      style={styles.taskContent}
-                    >
-                      <Checkbox
-                        status={task.completed ? 'checked' : 'unchecked'}
-                        onPress={() => handleToggleTask(task.id)}
-                        color="#6366f1"
-                        disabled={isDragging}
-                      />
-                      <Text
-                        style={[
-                          styles.taskText,
-                          task.completed && styles.taskTextCompleted,
-                        ]}
-                        onPress={() => !isDragging && handleToggleTask(task.id)}
-                      >
-                        {task.text}
-                      </Text>
-                    </TouchableOpacity>
-                    {isDragging ? (
-                      <View style={styles.reorderControls}>
-                        <IconButton
-                          icon="chevron-up"
-                          size={18}
-                          onPress={() => handleMoveUp(index)}
-                          iconColor="#6366f1"
-                          disabled={index === 0}
-                        />
-                        <IconButton
-                          icon="chevron-down"
-                          size={18}
-                          onPress={() => handleMoveDown(index)}
-                          iconColor="#6366f1"
-                          disabled={index === weeklyTasks.length - 1}
-                        />
-                        <IconButton
-                          icon="close"
-                          size={18}
-                          onPress={() => {
-                            setDraggingIndex(null);
-                            dragY.setValue(0);
-                          }}
-                          iconColor="#6b7280"
-                        />
-                      </View>
-                    ) : (
-                      <IconButton
-                        icon="delete-outline"
-                        size={18}
-                        onPress={() => handleDeleteTask(task.id)}
-                        iconColor="#ef4444"
-                      />
-                    )}
-                  </Animated.View>
-                );
-              })
-            )}
-          </Card.Content>
-        </Card>
 
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={false}
-          style={styles.horizontalScrollView}
-        >
-          <View style={styles.gridContainer}>
-            {renderGridHeader()}
-            {currentWeek.map(renderDayRow)}
-          </View>
-        </ScrollView>
+            {/* Yesterday page */}
+            <View style={[styles.todayYesterdayPage, { width: screenWidth }]}>
+              <Card style={styles.yesterdayCard}>
+                <Card.Content>
+                  <View style={styles.todayHeader}>
+                    <Text style={styles.yesterdayTitle}>Yesterday</Text>
+                    <Text style={styles.todaySubtitle}>
+                      {yesterday.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+                    </Text>
+                  </View>
+                  <View style={styles.todayProgressRow}>
+                    <View style={styles.todayProgressRing}>
+                      <Text style={styles.todayProgressCount}>{yesterdayDoneCount}</Text>
+                      <Text style={styles.todayProgressOf}>/ {activeHabits.length}</Text>
+                    </View>
+                    <ProgressBar progress={yesterdayDoneCount / Math.max(activeHabits.length, 1)} color="#6366f1" style={styles.todayProgressBar} />
+                  </View>
+                  <Text style={styles.todayTapHint}>Tap to add or edit</Text>
+                  <View style={styles.todayHabitCards}>
+                      {activeHabits.map(habit => {
+                        const done = state.habitEntries.some(e =>
+                          e.habitId === habit.id && e.date.toISOString().split('T')[0] === yesterdayStr && (habit.habitType === 'boolean' ? e.completed : true)
+                        );
+                        const entry = state.habitEntries.find(e => e.habitId === habit.id && e.date.toISOString().split('T')[0] === yesterdayStr);
+                        return (
+                          <TouchableOpacity
+                            key={habit.id}
+                            style={[styles.todayHabitCard, done && styles.todayHabitCardDone]}
+                            onPress={() => completeHabitForDate(habit, yesterday)}
+                            activeOpacity={0.8}
+                          >
+                            <View style={[styles.todayHabitIconWrap, { backgroundColor: (habit.color || '#6366f1') + '22' }]}>
+                              <Ionicons name="checkmark-circle" size={28} color={done ? '#10b981' : (habit.color || '#6366f1')} />
+                            </View>
+                            <View style={styles.todayHabitContent}>
+                              <Text style={[styles.todayHabitName, done && styles.todayHabitNameDone]} numberOfLines={2}>
+                                {habit.name}
+                              </Text>
+                              {habit.habitType === 'numeric' && (
+                                <Text style={styles.todayHabitUnit}>
+                                  {(entry ? entry.value : 0)} {habit.unit}
+                                </Text>
+                              )}
+                              <Text style={styles.todayLast10}>
+                                {habit.habitType === 'boolean'
+                                  ? `Last ${LAST_N_DAYS}d: ${getLast10DaysDoneCount(habit)}/${LAST_N_DAYS}`
+                                  : `Avg: ${getLast10DaysNumericAvg(habit).toFixed(1)} ${habit.unit}`}
+                              </Text>
+                            </View>
+                            {done && <Ionicons name="checkmark-done" size={24} color="#10b981" style={styles.todayHabitCheck} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                  </View>
+                </Card.Content>
+              </Card>
+            </View>
+          </ScrollView>
+        )}
+
+        {/* Habit history – last 14 days */}
+        {activeHabits.length > 0 && (
+          <Card style={styles.historyCard}>
+            <Card.Content>
+              <Title style={styles.historyTitle}>Last {HISTORY_DAYS} days</Title>
+              <Text style={styles.historySubtitle}>Quick view by habit</Text>
+              {activeHabits.map(habit => {
+                const days: { date: Date; done: boolean; value?: number }[] = [];
+                for (let i = 0; i < HISTORY_DAYS; i++) {
+                  const d = new Date();
+                  d.setDate(d.getDate() - i);
+                  d.setHours(0, 0, 0, 0);
+                  const dateStr = d.toISOString().split('T')[0];
+                  const entry = state.habitEntries.find(e =>
+                    e.habitId === habit.id && e.date.toISOString().split('T')[0] === dateStr
+                  );
+                  const done = entry && (habit.habitType === 'boolean' ? entry.completed : true);
+                  days.push({ date: d, done: !!done, value: entry?.value });
+                }
+                return (
+                  <TouchableOpacity
+                    key={habit.id}
+                    style={styles.historyRow}
+                    onPress={() => handleHabitClick(habit)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.historyHabitName} numberOfLines={1}>{habit.name}</Text>
+                    <View style={styles.historyDots}>
+                      {days.map((day, idx) => {
+                        const isToday = idx === 0;
+                        return (
+                          <View
+                            key={day.date.toISOString()}
+                            style={[
+                              styles.historyDot,
+                              day.done && styles.historyDotDone,
+                              isToday && styles.historyDotToday,
+                            ]}
+                          >
+                            {habit.habitType === 'numeric' && day.done && day.value != null && day.value > 0 ? (
+                              <Text style={styles.historyDotValue} numberOfLines={1}>{day.value}</Text>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </Card.Content>
+          </Card>
+        )}
 
         {state.habits.filter(habit => habit.isActive).length === 0 && (
           <View style={styles.emptyContainer}>
@@ -1032,27 +837,6 @@ const HabitsScreen = () => {
                 Delete Habit
               </Button>
             )}
-          </Dialog.Actions>
-        </Dialog>
-
-        <Dialog visible={showAddTaskDialog} onDismiss={() => setShowAddTaskDialog(false)}>
-          <Dialog.Title>Add Task for This Week</Dialog.Title>
-          <Dialog.Content>
-            <TextInput
-              label="Task"
-              value={newTaskText}
-              onChangeText={setNewTaskText}
-              style={styles.input}
-              placeholder="Enter a task to accomplish this week..."
-              onSubmitEditing={handleAddTask}
-            />
-          </Dialog.Content>
-          <Dialog.Actions>
-            <Button onPress={() => {
-              setShowAddTaskDialog(false);
-              setNewTaskText('');
-            }}>Cancel</Button>
-            <Button onPress={handleAddTask} mode="contained">Add Task</Button>
           </Dialog.Actions>
         </Dialog>
 
@@ -1471,6 +1255,229 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: '#6366f1',
+  },
+
+  // Today hero
+  celebrationToast: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    right: 20,
+    backgroundColor: '#10b981',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    zIndex: 1000,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  celebrationText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  todayYesterdayScroll: {
+    marginBottom: 8,
+  },
+  todayYesterdayContent: {},
+  todayYesterdayPage: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  todayCard: {
+    marginBottom: 0,
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 2,
+    backgroundColor: '#fff',
+    flex: 1,
+  },
+  todayHeader: {
+    marginBottom: 12,
+  },
+  todayTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1f2937',
+  },
+  todaySubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  todayProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 12,
+  },
+  todayProgressRing: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  todayProgressCount: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#6366f1',
+  },
+  todayProgressOf: {
+    fontSize: 16,
+    color: '#6b7280',
+    marginLeft: 2,
+  },
+  todayProgressBar: {
+    flex: 1,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#e5e7eb',
+  },
+  todayProgressPct: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+    minWidth: 36,
+    textAlign: 'right',
+  },
+  todayTapHint: {
+    fontSize: 12,
+    color: '#9ca3af',
+    marginBottom: 12,
+  },
+  todayHabitCards: {
+    gap: 10,
+  },
+  todayHabitCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  todayHabitCardDone: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#10b981',
+  },
+  todayHabitIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  todayHabitContent: {
+    flex: 1,
+  },
+  todayHabitName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+  },
+  todayHabitNameDone: {
+    color: '#059669',
+    textDecorationLine: 'line-through',
+  },
+  todayHabitUnit: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  todayLast10: {
+    fontSize: 11,
+    color: '#9ca3af',
+    marginTop: 4,
+  },
+  todayStreakBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 4,
+  },
+  todayStreakText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#f59e0b',
+  },
+  todayHabitCheck: {
+    marginLeft: 8,
+  },
+  yesterdayCard: {
+    marginBottom: 0,
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 2,
+    backgroundColor: '#f8fafc',
+    flex: 1,
+  },
+  yesterdayTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#4f46e5',
+  },
+  historyCard: {
+    margin: 16,
+    marginBottom: 24,
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 2,
+  },
+  historyTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 4,
+  },
+  historySubtitle: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 12,
+  },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  historyHabitName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    width: 100,
+    marginRight: 12,
+  },
+  historyDots: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    justifyContent: 'flex-end',
+  },
+  historyDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#e5e7eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyDotDone: {
+    backgroundColor: '#10b981',
+  },
+  historyDotToday: {
+    borderWidth: 2,
+    borderColor: '#6366f1',
+  },
+  historyDotValue: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#fff',
   },
   
   // Dialog styles

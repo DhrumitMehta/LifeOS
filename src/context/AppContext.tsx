@@ -311,6 +311,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     initializeApp();
   }, []);
 
+  // Recompute analytics whenever source data changes or when initial load finishes (fixes Analytics showing nothing until other pages load)
+  useEffect(() => {
+    if (!state.isLoading) {
+      calculateAnalytics();
+    }
+  }, [
+    state.isLoading,
+    state.transactions,
+    state.investments,
+    state.habits,
+    state.habitEntries,
+  ]);
+
   const initializeApp = async () => {
     try {
       dispatch({ type: 'SET_LOADING', payload: true });
@@ -323,7 +336,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await loadCategories();
       await refreshData();
       await processDueSubscriptions();
-      await calculateAnalytics();
+      // Analytics are computed in useEffect when transactions/habits/etc. update (after this re-renders)
       
       // Schedule daily notifications after data is loaded
       // Note: This will be called again in refreshData, but it's safe to call multiple times

@@ -41,6 +41,10 @@
       "eas": {
         "projectId": "1692725a-a1e9-4f06-b337-13a95fa86dfb"
       }
+    },
+    "updates": {
+      "enabled": false,
+      "checkAutomatically": "NEVER"
     }
   }
 }

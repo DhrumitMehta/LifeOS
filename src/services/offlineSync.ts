@@ -7,9 +7,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../config/supabase';
 import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription } from '../types';
+import { getActiveUserId, scopedStorageKey } from './userSession';
 
-const OFFLINE_QUEUE_KEY = 'lifeos_offline_queue';
 const SYNC_IN_PROGRESS_KEY = 'lifeos_sync_in_progress';
+
+function offlineQueueStorageKey(): string {
+  const id = getActiveUserId();
+  if (!id) return 'lifeos_offline_queue';
+  return scopedStorageKey('offline_queue');
+}
 
 interface QueuedOperation {
   id: string;
@@ -61,7 +67,7 @@ class OfflineSyncService {
         timestamp: Date.now(),
       };
       queue.push(operation);
-      await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
+      await AsyncStorage.setItem(offlineQueueStorageKey(), JSON.stringify(queue));
       console.log(`Queued ${type} operation for ${table}`);
     } catch (error) {
       console.error('Error queueing operation:', error);
@@ -73,7 +79,7 @@ class OfflineSyncService {
    */
   private async getQueue(): Promise<QueuedOperation[]> {
     try {
-      const queueData = await AsyncStorage.getItem(OFFLINE_QUEUE_KEY);
+      const queueData = await AsyncStorage.getItem(offlineQueueStorageKey());
       return queueData ? JSON.parse(queueData) : [];
     } catch (error) {
       console.error('Error getting queue:', error);
@@ -86,7 +92,7 @@ class OfflineSyncService {
    */
   private async clearQueue(): Promise<void> {
     try {
-      await AsyncStorage.removeItem(OFFLINE_QUEUE_KEY);
+      await AsyncStorage.removeItem(offlineQueueStorageKey());
     } catch (error) {
       console.error('Error clearing queue:', error);
     }
@@ -157,7 +163,7 @@ class OfflineSyncService {
 
       // Remove successful operations from queue
       if (failedOps.length > 0) {
-        await AsyncStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(failedOps));
+        await AsyncStorage.setItem(offlineQueueStorageKey(), JSON.stringify(failedOps));
         console.log(`${failedOps.length} operations failed and will be retried later`);
       } else {
         await this.clearQueue();
@@ -177,31 +183,44 @@ class OfflineSyncService {
    * Execute a single queued operation
    */
   private async executeOperation(operation: QueuedOperation): Promise<void> {
-    const serializedData = this.serializeDates(operation.data);
+    const uid = getActiveUserId();
+    if (!uid) {
+      throw new Error('No active user for offline sync');
+    }
+
+    const serializedData: Record<string, unknown> = {
+      ...this.serializeDates(operation.data),
+      user_id: uid,
+    };
 
     switch (operation.type) {
-      case 'create':
+      case 'create': {
         const { error: insertError } = await supabase
           .from(operation.table)
           .insert(serializedData);
         if (insertError) throw insertError;
         break;
+      }
 
-      case 'update':
+      case 'update': {
         const { error: updateError } = await supabase
           .from(operation.table)
           .update(serializedData)
-          .eq('id', operation.data.id);
+          .eq('id', operation.data.id)
+          .eq('user_id', uid);
         if (updateError) throw updateError;
         break;
+      }
 
-      case 'delete':
+      case 'delete': {
         const { error: deleteError } = await supabase
           .from(operation.table)
           .delete()
-          .eq('id', operation.data.id);
+          .eq('id', operation.data.id)
+          .eq('user_id', uid);
         if (deleteError) throw deleteError;
         break;
+      }
     }
   }
 
@@ -210,27 +229,27 @@ class OfflineSyncService {
    * This handles cases where data was saved to AsyncStorage while offline
    */
   private async syncAsyncStorageData(): Promise<void> {
-    const tables = [
-      'lifeos_habits',
-      'lifeos_habit_entries',
-      'lifeos_journal_entries',
-      'lifeos_transactions',
-      'lifeos_investments',
-      'lifeos_budgets',
-      'lifeos_accounts',
-      'lifeos_subscriptions',
+    if (!getActiveUserId()) return;
+
+    const tables: { storageShort: string; tableName: string }[] = [
+      { storageShort: 'habits', tableName: 'habits' },
+      { storageShort: 'habit_entries', tableName: 'habit_entries' },
+      { storageShort: 'journal_entries', tableName: 'journal_entries' },
+      { storageShort: 'transactions', tableName: 'transactions' },
+      { storageShort: 'investments', tableName: 'investments' },
+      { storageShort: 'budgets', tableName: 'budgets' },
+      { storageShort: 'accounts', tableName: 'accounts' },
+      { storageShort: 'subscriptions', tableName: 'subscriptions' },
     ];
 
-    for (const key of tables) {
+    for (const { storageShort, tableName } of tables) {
+      const key = scopedStorageKey(storageShort);
       try {
         const data = await AsyncStorage.getItem(key);
         if (!data) continue;
 
         const items = JSON.parse(data);
         if (items.length === 0) continue;
-
-        // Determine table name from key
-        const tableName = key.replace('lifeos_', '');
         
         // Get existing data from Supabase to avoid duplicates
         const { data: existingData } = await supabase
@@ -243,7 +262,12 @@ class OfflineSyncService {
         const newItems = items.filter((item: any) => !existingIds.has(item.id));
         
         if (newItems.length > 0) {
-          const serializedItems = newItems.map((item: any) => this.serializeDates(item));
+          const uid = getActiveUserId();
+          if (!uid) continue;
+          const serializedItems = newItems.map((item: any) => ({
+            ...this.serializeDates(item),
+            user_id: uid,
+          }));
           const { error } = await supabase
             .from(tableName)
             .insert(serializedItems);

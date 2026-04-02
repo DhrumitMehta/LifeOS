@@ -117,6 +117,14 @@ export interface Subscription {
   updatedAt: Date;
 }
 
+/** Signed-in user for UI + storage scope (Supabase Auth UUID or local profile id). */
+export interface AppAuthUser {
+  id: string;
+  email: string | null;
+  displayName: string;
+  provider: 'supabase' | 'local';
+}
+
 export interface Analytics {
   totalIncome: number;
   totalExpenses: number;

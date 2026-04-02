@@ -2,7 +2,8 @@ import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabaseDatabase } from '../database/supabaseDatabase';
 import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Analytics, Subscription } from '../types';
-import { scheduleDailyNotifications } from '../services/notifications';
+import { scheduleLifeOSNotifications } from '../services/notifications';
+import { scopedStorageKey } from '../services/userSession';
 
 interface TransactionCategories {
   income: string[];
@@ -307,6 +308,20 @@ export const useApp = () => {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
+  const financeTxnCountRollingWeek = (txns: Transaction[]) =>
+    txns.filter((t) => new Date(t.date).getTime() >= Date.now() - 7 * 86400000).length;
+
+  const rescheduleNotifications = async (habits: Habit[], txns: Transaction[]) => {
+    try {
+      await scheduleLifeOSNotifications({
+        habits,
+        financeTxnCountWeek: financeTxnCountRollingWeek(txns),
+      });
+    } catch (e) {
+      console.error('Notification scheduling failed', e);
+    }
+  };
+
   useEffect(() => {
     initializeApp();
   }, []);
@@ -347,16 +362,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const categoriesStorageKey = () => scopedStorageKey('transaction_categories');
+
   const loadCategories = async () => {
     try {
-      const stored = await AsyncStorage.getItem('transactionCategories');
+      const stored = await AsyncStorage.getItem(categoriesStorageKey());
       if (stored) {
         const categories = JSON.parse(stored);
         dispatch({ type: 'SET_CATEGORIES', payload: categories });
       } else {
-        // Use default categories
         dispatch({ type: 'SET_CATEGORIES', payload: defaultCategories });
-        await AsyncStorage.setItem('transactionCategories', JSON.stringify(defaultCategories));
+        await AsyncStorage.setItem(categoriesStorageKey(), JSON.stringify(defaultCategories));
       }
     } catch (error) {
       console.error('Error loading categories:', error);
@@ -366,7 +382,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const saveCategories = async (categories: TransactionCategories) => {
     try {
-      await AsyncStorage.setItem('transactionCategories', JSON.stringify(categories));
+      await AsyncStorage.setItem(categoriesStorageKey(), JSON.stringify(categories));
     } catch (error) {
       console.error('Error saving categories:', error);
       throw error;
@@ -407,8 +423,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const subscriptions = await supabaseDatabase.getSubscriptions();
       dispatch({ type: 'SET_SUBSCRIPTIONS', payload: subscriptions });
       
-      // Reschedule notifications with updated habits
-      await scheduleDailyNotifications(habits);
+      await rescheduleNotifications(habits, transactions);
     } catch (error) {
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to load data' });
     }
@@ -693,7 +708,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       // Reschedule notifications with updated habits
       const updatedHabits = [...state.habits, habit];
-      await scheduleDailyNotifications(updatedHabits);
+      await rescheduleNotifications(updatedHabits, state.transactions);
       
       console.log('Context: Habit added successfully');
       return habit;
@@ -714,7 +729,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     // Reschedule notifications with updated habits
     const updatedHabits = state.habits.map(h => h.id === habit.id ? updatedHabit : h);
-    await scheduleDailyNotifications(updatedHabits);
+    await rescheduleNotifications(updatedHabits, state.transactions);
   };
 
   const deleteHabit = async (id: string) => {
@@ -729,7 +744,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       // Reschedule notifications with updated habits
       const updatedHabits = state.habits.filter(h => h.id !== id);
-      await scheduleDailyNotifications(updatedHabits);
+      await rescheduleNotifications(updatedHabits, state.transactions);
       
       console.log('Context: Habit deleted successfully');
     } catch (error) {

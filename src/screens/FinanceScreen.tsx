@@ -29,6 +29,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { Transaction, Investment, Budget, Subscription, RootStackParamList } from '../types';
 import { formatDate } from '../utils/dateFormat';
+import { scopedStorageKey } from '../services/userSession';
 
 type FinanceScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Main'>;
 
@@ -145,8 +146,9 @@ const FinanceScreen = () => {
     recurringDate: '1',
     account: 'Cash',
   });
+  const [loansSectionExpanded, setLoansSectionExpanded] = useState(false);
 
-  const GOALS_STORAGE_KEY = 'lifeos_financial_goals';
+  const goalsStorageKey = () => scopedStorageKey('financial_goals');
 
   useEffect(() => {
     loadGoals();
@@ -156,7 +158,7 @@ const FinanceScreen = () => {
 
   const loadGoals = async () => {
     try {
-      const stored = await AsyncStorage.getItem(GOALS_STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(goalsStorageKey());
       if (stored) {
         const goals = JSON.parse(stored);
         if (Array.isArray(goals) && goals.length > 0) {
@@ -170,7 +172,7 @@ const FinanceScreen = () => {
 
   const saveGoals = async (goals: string[]) => {
     try {
-      await AsyncStorage.setItem(GOALS_STORAGE_KEY, JSON.stringify(goals));
+      await AsyncStorage.setItem(goalsStorageKey(), JSON.stringify(goals));
       setFinancialGoals(goals);
       setIsEditingGoals(false);
     } catch (error) {
@@ -424,6 +426,52 @@ const FinanceScreen = () => {
     }
   }, [expenseCategories.length]);
 
+  const loanAnalytics = useMemo(() => {
+    const loanTx = state.transactions.filter(
+      (t) => (t.category || '').trim().toLowerCase() === 'loan'
+    );
+    const loansOut = loanTx
+      .filter((t) => t.type === 'expense')
+      .reduce((s, t) => s + t.amount, 0);
+    const loansIn = loanTx
+      .filter((t) => t.type === 'income')
+      .reduce((s, t) => s + t.amount, 0);
+    const netBalance = loansIn - loansOut;
+
+    const byDesc = new Map<
+      string,
+      {
+        description: string;
+        inAmount: number;
+        outAmount: number;
+        lastDate: Date;
+        lastId: string;
+      }
+    >();
+    for (const t of loanTx) {
+      const key = (t.description || '').trim() || 'Untitled';
+      const cur = byDesc.get(key) || {
+        description: key,
+        inAmount: 0,
+        outAmount: 0,
+        lastDate: new Date(0),
+        lastId: t.id,
+      };
+      if (t.type === 'income') cur.inAmount += t.amount;
+      else cur.outAmount += t.amount;
+      if (t.date.getTime() >= cur.lastDate.getTime()) {
+        cur.lastDate = t.date;
+        cur.lastId = t.id;
+      }
+      byDesc.set(key, cur);
+    }
+    const loanLines = Array.from(byDesc.values()).sort(
+      (a, b) => b.lastDate.getTime() - a.lastDate.getTime()
+    );
+
+    return { loansOut, loansIn, netBalance, loanLines };
+  }, [state.transactions]);
+
   const categoryTrendData = useMemo(() => {
     if (!selectedCategory) return null;
 
@@ -642,6 +690,131 @@ const FinanceScreen = () => {
           </Card>
         </View>
       </View>
+
+      <Card style={styles.loanCard}>
+        <Card.Content>
+          <TouchableOpacity
+            style={[
+              styles.loanCardHeaderTouchable,
+              loansSectionExpanded && styles.loanCardHeaderTouchableExpanded,
+            ]}
+            onPress={() => setLoansSectionExpanded((v) => !v)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.loanCardHeader}>
+              <Ionicons name="git-compare-outline" size={22} color="#b45309" />
+              <View style={styles.loanCardHeaderText}>
+                <Title style={styles.loanCardTitle}>Loans (category)</Title>
+                {!loansSectionExpanded && (
+                  <Text style={styles.loanCollapsedHint}>
+                    {loanAnalytics.loanLines.length > 0
+                      ? `${loanAnalytics.loanLines.length} description${loanAnalytics.loanLines.length === 1 ? '' : 's'} · tap to expand`
+                      : 'Tap to expand'}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.loanHeaderRight}>
+              <Text
+                style={[
+                  styles.loanCollapsedNet,
+                  {
+                    color:
+                      loanAnalytics.netBalance > 0
+                        ? '#059669'
+                        : loanAnalytics.netBalance < 0
+                          ? '#dc2626'
+                          : '#6b7280',
+                  },
+                ]}
+              >
+                {loanAnalytics.netBalance > 0 ? '+' : ''}
+                {formatCurrency(loanAnalytics.netBalance)}
+              </Text>
+              <Ionicons
+                name={loansSectionExpanded ? 'chevron-up' : 'chevron-down'}
+                size={22}
+                color="#b45309"
+              />
+            </View>
+          </TouchableOpacity>
+
+          {loansSectionExpanded && (
+            <>
+              <Paragraph style={styles.loanCardSubtitle}>
+                Totals from transactions with category Loan: out = expenses, in = income. Net = in − out.
+              </Paragraph>
+
+              <View style={styles.loanSummaryRow}>
+                <View style={styles.loanSummaryHalf}>
+                  <Text style={styles.loanStatLabel}>Loans out</Text>
+                  <Text style={styles.loanStatValue}>{formatCurrency(loanAnalytics.loansOut)}</Text>
+                </View>
+                <View style={styles.loanSummaryHalf}>
+                  <Text style={styles.loanStatLabel}>Loans in</Text>
+                  <Text style={styles.loanStatValue}>{formatCurrency(loanAnalytics.loansIn)}</Text>
+                </View>
+              </View>
+
+              <View style={styles.loanNetRow}>
+                <Text style={styles.loanNetLabel}>Current loan balance (net)</Text>
+                <Text
+                  style={[
+                    styles.loanNetAmount,
+                    {
+                      color:
+                        loanAnalytics.netBalance > 0
+                          ? '#059669'
+                          : loanAnalytics.netBalance < 0
+                            ? '#dc2626'
+                            : '#6b7280',
+                    },
+                  ]}
+                >
+                  {loanAnalytics.netBalance > 0 ? '+' : ''}
+                  {formatCurrency(loanAnalytics.netBalance)}
+                </Text>
+              </View>
+
+              <Title style={styles.loanListTitle}>Loans by description</Title>
+              {loanAnalytics.loanLines.length > 0 ? (
+                loanAnalytics.loanLines.map((line) => {
+                  const lineNet = line.inAmount - line.outAmount;
+                  return (
+                    <List.Item
+                      key={line.description}
+                      title={line.description}
+                      description={`In ${formatCurrency(line.inAmount)} · Out ${formatCurrency(line.outAmount)} · ${formatDate(line.lastDate)}`}
+                      titleNumberOfLines={2}
+                      onPress={() =>
+                        navigation.navigate('TransactionDetail', { transactionId: line.lastId })
+                      }
+                      right={() => (
+                        <Text
+                          style={[
+                            styles.loanLineNet,
+                            {
+                              color: lineNet > 0 ? '#059669' : lineNet < 0 ? '#dc2626' : '#6b7280',
+                            },
+                          ]}
+                        >
+                          {lineNet > 0 ? '+' : ''}
+                          {formatCurrency(lineNet)}
+                        </Text>
+                      )}
+                      style={styles.loanListItem}
+                    />
+                  );
+                })
+              ) : (
+                <Text style={styles.emptyText}>
+                  No loan transactions yet. Record them with category Loan (income or expense).
+                </Text>
+              )}
+            </>
+          )}
+        </Card.Content>
+      </Card>
 
       <Card style={styles.categoryTrendCard}>
         <Card.Content>
@@ -1639,6 +1812,123 @@ const styles = StyleSheet.create({
   },
   recentCard: {
     marginBottom: 16,
+  },
+  loanCard: {
+    marginBottom: 16,
+    backgroundColor: '#fffbeb',
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
+  },
+  loanCardHeaderTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 0,
+    paddingVertical: 2,
+  },
+  loanCardHeaderTouchableExpanded: {
+    marginBottom: 10,
+    paddingBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fde68a',
+  },
+  loanCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
+  },
+  loanCardHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  loanHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  loanCollapsedNet: {
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  loanCollapsedHint: {
+    fontSize: 11,
+    color: '#78716c',
+    marginTop: 2,
+  },
+  loanCardTitle: {
+    fontSize: 18,
+    marginBottom: 0,
+    color: '#92400e',
+  },
+  loanCardSubtitle: {
+    fontSize: 12,
+    color: '#78716c',
+    marginBottom: 14,
+    lineHeight: 18,
+  },
+  loanSummaryRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 14,
+  },
+  loanSummaryHalf: {
+    flex: 1,
+    backgroundColor: '#fff7ed',
+    borderRadius: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  loanStatLabel: {
+    fontSize: 12,
+    color: '#9a3412',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  loanStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#431407',
+  },
+  loanNetRow: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+  },
+  loanNetLabel: {
+    fontSize: 13,
+    color: '#78350f',
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  loanNetAmount: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  loanListTitle: {
+    fontSize: 16,
+    marginBottom: 4,
+    color: '#1f2937',
+  },
+  loanListItem: {
+    paddingLeft: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    borderRadius: 8,
+    marginBottom: 6,
+  },
+  loanLineNet: {
+    fontSize: 15,
+    fontWeight: '700',
+    alignSelf: 'center',
+    marginRight: 4,
   },
   budgetsCard: {
     marginBottom: 16,

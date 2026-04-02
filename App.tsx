@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { AppState, Platform, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, AppState, DeviceEventEmitter, Platform, View, StyleSheet } from 'react-native';
 import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -8,12 +8,22 @@ import { Provider as PaperProvider, IconButton } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { AppProvider } from './src/context/AppContext';
+import {
+  TabBarPreferencesProvider,
+  TabBarVisibility,
+  useTabBarPreferences,
+} from './src/context/TabBarPreferencesContext';
+import LoginScreen from './src/screens/LoginScreen';
 import { RootStackParamList, TabParamList } from './src/types';
 import { registerForPushNotificationsAsync } from './src/services/notifications';
 import { NotificationScheduler } from './src/components/NotificationScheduler';
 import { NotionConnectionModal } from './src/components/NotionConnectionModal';
+import { OnboardingTutorial, REPLAY_TUTORIAL_EVENT } from './src/components/OnboardingTutorial';
 import MenuDrawer from './src/components/MenuDrawer';
+import { scopedStorageKey } from './src/services/userSession';
 import { testNotionConnection } from './src/services/notion';
 import { appTheme } from './src/theme';
 
@@ -36,7 +46,15 @@ import BudgetDetailScreen from './src/screens/BudgetDetailScreen';
 const Tab = createBottomTabNavigator<TabParamList>();
 const Stack = createStackNavigator<RootStackParamList>();
 
-const TabNavigator = ({ onMenuPress }: { onMenuPress: () => void }) => {
+const TUTORIAL_DONE_KEY = 'tutorial_v1_done';
+
+const TabNavigator = ({
+  onMenuPress,
+  tabVisibility,
+}: {
+  onMenuPress: () => void;
+  tabVisibility: TabBarVisibility;
+}) => {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -79,42 +97,89 @@ const TabNavigator = ({ onMenuPress }: { onMenuPress: () => void }) => {
         ),
       })}
     >
-      <Tab.Screen 
-        name="Home" 
-        component={HomeScreen}
-        options={{ title: 'Home' }}
-      />
-      <Tab.Screen 
-        name="Habits" 
+      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }} />
+      <Tab.Screen
+        name="Habits"
         component={HabitsScreen}
-        options={{ title: 'Habits' }}
+        options={{
+          title: 'Habits',
+          tabBarButton: tabVisibility.Habits ? undefined : () => null,
+        }}
       />
-      <Tab.Screen 
-        name="Journal" 
+      <Tab.Screen
+        name="Journal"
         component={JournalScreen}
-        options={{ title: 'Journal' }}
+        options={{
+          title: 'Journal',
+          tabBarButton: tabVisibility.Journal ? undefined : () => null,
+        }}
       />
-      <Tab.Screen 
-        name="Finance" 
+      <Tab.Screen
+        name="Finance"
         component={FinanceScreen}
-        options={{ title: 'Finance' }}
+        options={{
+          title: 'Finance',
+          tabBarButton: tabVisibility.Finance ? undefined : () => null,
+        }}
       />
-      <Tab.Screen 
-        name="Visualization" 
+      <Tab.Screen
+        name="Visualization"
         component={VisualizationScreen}
-        options={{ title: 'Visualization' }}
+        options={{
+          title: 'Visualization',
+          tabBarButton: tabVisibility.Visualization ? undefined : () => null,
+        }}
       />
     </Tab.Navigator>
   );
 };
 
 const AppContent = () => {
+  const { visibility: tabVisibility } = useTabBarPreferences();
   const notificationListener = useRef<Notifications.Subscription | undefined>(undefined);
   const responseListener = useRef<Notifications.Subscription | undefined>(undefined);
   const [showNotionModal, setShowNotionModal] = useState(false);
   const [notionChecked, setNotionChecked] = useState(false);
   const [showMenuDrawer, setShowMenuDrawer] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
+
+  useEffect(() => {
+    if (!notionChecked || showNotionModal) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const key = scopedStorageKey(TUTORIAL_DONE_KEY);
+        const done = await AsyncStorage.getItem(key);
+        if (!cancelled && !done) {
+          setShowTutorial(true);
+        }
+      } catch (e) {
+        console.warn('Tutorial storage check failed:', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [notionChecked, showNotionModal]);
+
+  const completeTutorial = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(scopedStorageKey(TUTORIAL_DONE_KEY), '1');
+    } catch (e) {
+      console.warn('Tutorial save failed:', e);
+    }
+    setShowTutorial(false);
+  }, []);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(REPLAY_TUTORIAL_EVENT, () => {
+      if (notionChecked && !showNotionModal) {
+        setShowTutorial(true);
+      }
+    });
+    return () => sub.remove();
+  }, [notionChecked, showNotionModal]);
 
   useEffect(() => {
     // Notifications only on native (not on web)
@@ -124,7 +189,17 @@ const AppContent = () => {
         console.log('Notification received:', notification);
       });
       responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-        console.log('Notification response:', response);
+        const data = response.notification.request.content.data as { type?: string };
+        const nav = navigationRef.current;
+        if (nav?.isReady() && data?.type) {
+          if (data.type === 'journal_reminder') {
+            nav.navigate('Main', { screen: 'Journal' });
+          } else if (data.type === 'finance_reminder') {
+            nav.navigate('Main', { screen: 'Finance' });
+          } else if (data.type === 'habit_reminder') {
+            nav.navigate('Main', { screen: 'Habits' });
+          }
+        }
       });
     }
 
@@ -211,7 +286,12 @@ const AppContent = () => {
             name="Main" 
             options={{ headerShown: false }}
           >
-            {() => <TabNavigator onMenuPress={() => setShowMenuDrawer(true)} />}
+            {() => (
+              <TabNavigator
+                onMenuPress={() => setShowMenuDrawer(true)}
+                tabVisibility={tabVisibility}
+              />
+            )}
           </Stack.Screen>
           <Stack.Screen 
             name="Profile" 
@@ -266,6 +346,7 @@ const AppContent = () => {
         onClose={() => setShowMenuDrawer(false)}
         navigationRef={navigationRef as React.RefObject<NavigationContainerRef<RootStackParamList>>}
       />
+      <OnboardingTutorial visible={showTutorial} onComplete={completeTutorial} />
       <StatusBar style="light" />
     </>
   );
@@ -280,16 +361,46 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
+  authLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+  },
 });
 
-const App = () => {
+function AppGate() {
+  const { user, isReady } = useAuth();
+
+  if (!isReady) {
+    return (
+      <View style={styles.authLoading}>
+        <ActivityIndicator size="large" color="#818cf8" />
+      </View>
+    );
+  }
+
+  if (!user) {
+    return <LoginScreen />;
+  }
+
   return (
-    <AppProvider>
-      <PaperProvider theme={appTheme}>
-        <AppContent />
-      </PaperProvider>
+    <AppProvider key={user.id}>
+      <TabBarPreferencesProvider>
+        <PaperProvider theme={appTheme}>
+          <AppContent />
+        </PaperProvider>
+      </TabBarPreferencesProvider>
     </AppProvider>
   );
-};
+}
+
+const App = () => (
+  <SafeAreaProvider>
+    <AuthProvider>
+      <AppGate />
+    </AuthProvider>
+  </SafeAreaProvider>
+);
 
 export default App;

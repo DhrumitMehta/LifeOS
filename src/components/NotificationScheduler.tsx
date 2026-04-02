@@ -1,28 +1,29 @@
 import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { scheduleDailyNotifications } from '../services/notifications';
+import { scheduleLifeOSNotifications } from '../services/notifications';
 
 /**
- * Component that ensures notifications are scheduled when app comes to foreground
- * This handles cases where:
- * - App hasn't been opened yet (first time)
- * - Device was restarted (notifications might be cleared)
- * - App data was cleared
+ * Reschedules local reminders when the app returns to foreground so triggers stay fresh.
  */
 export const NotificationScheduler = () => {
   const { state } = useApp();
   const appState = useRef(AppState.currentState);
 
+  const financeTxnCountWeek = state.transactions.filter(
+    (t) => new Date(t.date).getTime() >= Date.now() - 7 * 86400000
+  ).length;
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      // When app comes to foreground, reschedule notifications to ensure they're set
       if (
         appState.current.match(/inactive|background/) &&
         nextAppState === 'active'
       ) {
-        console.log('App has come to the foreground, rescheduling notifications...');
-        scheduleDailyNotifications(state.habits).catch(error => {
+        scheduleLifeOSNotifications({
+          habits: state.habits,
+          financeTxnCountWeek,
+        }).catch((error) => {
           console.error('Error rescheduling notifications:', error);
         });
       }
@@ -33,8 +34,7 @@ export const NotificationScheduler = () => {
     return () => {
       subscription.remove();
     };
-  }, [state.habits]);
+  }, [state.habits, financeTxnCountWeek]);
 
   return null;
 };
-

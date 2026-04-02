@@ -3,7 +3,6 @@ import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-// Configure how notifications are handled when app is in foreground
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -13,60 +12,80 @@ Notifications.setNotificationHandler({
   }),
 });
 
+const ANDROID_CHANNELS = [
+  { id: 'lifeos_habits', name: 'Habits' },
+  { id: 'lifeos_journal', name: 'Journal' },
+  { id: 'lifeos_finance', name: 'Finance' },
+];
+
+async function ensureAndroidChannels(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  for (const ch of ANDROID_CHANNELS) {
+    await Notifications.setNotificationChannelAsync(ch.id, {
+      name: ch.name,
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 200, 120, 200],
+      sound: 'default',
+    });
+  }
+}
+
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
-  let token = null;
+  await ensureAndroidChannels();
+
+  let token: string | null = null;
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
+      importance: Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
+      lightColor: '#6366f1',
     });
   }
 
   if (Device.isDevice) {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
-    
+
     if (existingStatus !== 'granted') {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
     }
-    
+
     if (finalStatus !== 'granted') {
-      console.log('Failed to get push token for push notification!');
+      console.log('Notification permission not granted');
       return null;
     }
 
     try {
       const projectId =
         Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-      
-      if (!projectId) {
-        throw new Error('Project ID not found');
+
+      if (projectId) {
+        token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+        console.log('Expo push token:', token);
       }
-      
-      token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      console.log('Expo push token:', token);
     } catch (e) {
       console.error('Error getting push token:', e);
       token = null;
     }
   } else {
-    console.log('Must use physical device for Push Notifications');
+    console.log('Push notifications require a physical device');
   }
 
   return token;
 }
 
 export async function sendTestNotification(): Promise<void> {
+  await ensureAndroidChannels();
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: "Test Notification 📬",
-      body: 'This is a test notification from LifeOS!',
-      data: { test: 'notification data' },
+      title: 'LifeOS is listening ✦',
+      body: 'When you allow reminders, we nudge your habits, journal, and money story — never spam, always skippable.',
       sound: true,
+      data: { type: 'test' },
+      ...(Platform.OS === 'android' ? { channelId: 'default' } : {}),
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
@@ -76,129 +95,196 @@ export async function sendTestNotification(): Promise<void> {
 }
 
 export async function getNotificationPermissions(): Promise<Notifications.NotificationPermissionsStatus> {
-  return await Notifications.getPermissionsAsync();
+  return Notifications.getPermissionsAsync();
 }
 
 export async function requestNotificationPermissions(): Promise<Notifications.NotificationPermissionsStatus> {
-  return await Notifications.requestPermissionsAsync();
+  return Notifications.requestPermissionsAsync();
 }
 
-export interface Habit {
-  id: string;
-  name: string;
-  isActive: boolean;
+export interface ScheduleLifeOSParams {
+  habits: { id: string; name: string; isActive: boolean }[];
+  financeTxnCountWeek: number;
 }
 
-// Schedule daily notifications
-export async function scheduleDailyNotifications(habits: Habit[]): Promise<void> {
-  try {
-    // Cancel all existing scheduled notifications first
-    await Notifications.cancelAllScheduledNotificationsAsync();
-
-    // Schedule 8am journal reminder
-    await scheduleJournalReminder();
-
-    // Schedule 7:30pm family time reminder
-    await scheduleFamilyTimeReminder();
-
-    // Schedule habit reminders starting at 9am (one per hour)
-    await scheduleHabitReminders(habits);
-
-    console.log(`✅ Scheduled notifications: Journal (8am), Family Time (7:30pm), and ${habits.filter(h => h.isActive).length} habit reminders`);
-  } catch (error) {
-    console.error('Error scheduling notifications:', error);
-    throw error;
+function hashSeed(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
   }
+  return Math.abs(h);
 }
 
-async function scheduleJournalReminder(): Promise<void> {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "Good Morning! ☀️",
-        body: "It's time to fill your journal",
-        sound: true,
-        data: { type: 'journal_reminder' },
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour: 8,
-        minute: 0,
-      },
-    });
-    console.log('✅ Journal reminder scheduled for 8:00 AM daily');
-  } catch (error) {
-    console.error('Error scheduling journal reminder:', error);
-    throw error;
+const JOURNAL_PROMPTS: { title: string; body: string }[] = [
+  {
+    title: 'Your brain wants a download',
+    body: 'Before the day runs away — one journal line about what actually mattered.',
+  },
+  {
+    title: 'Micro-journal challenge',
+    body: 'Three bullets: mood, one win, one thing to let go. That counts.',
+  },
+  {
+    title: 'Plot twist: you document it',
+    body: 'Future-you is nosy. Leave them a paragraph in the journal.',
+  },
+  {
+    title: 'Silence is expensive',
+    body: 'Untangle a thought in your journal — cheaper than carrying it all week.',
+  },
+];
+
+const HABIT_TITLE_STYLES = [
+  (name: string) => `${name} — today’s cameo`,
+  (name: string) => `Spotlight: ${name}`,
+  (name: string) => `Tiny contract: ${name}`,
+  (name: string) => `Streak fuel: ${name}`,
+];
+
+const HABIT_BODY_STYLES = [
+  (name: string) => `No guilt trips — just check in: did ${name} happen (even 1% counts)?`,
+  (name: string) => `Imagine closing today proud of ${name}. What’s the smallest step?`,
+  (name: string) => `${name} doesn’t need a perfect hour; it needs an honest tap in LifeOS.`,
+  (name: string) => `Your habits are votes. Cast one for ${name} when you open the app.`,
+];
+
+function journalPromptForToday(): { title: string; body: string } {
+  const i = new Date().getDate() % JOURNAL_PROMPTS.length;
+  return JOURNAL_PROMPTS[i];
+}
+
+function habitCopy(habit: { id: string; name: string }, slot: number): { title: string; body: string } {
+  const h = hashSeed(`${habit.id}_${slot}`);
+  const titleFn = HABIT_TITLE_STYLES[h % HABIT_TITLE_STYLES.length];
+  const bodyFn = HABIT_BODY_STYLES[(h >> 3) % HABIT_BODY_STYLES.length];
+  return { title: titleFn(habit.name), body: bodyFn(habit.name) };
+}
+
+function financeCopy(txnWeek: number): { title: string; body: string } {
+  if (txnWeek >= 8) {
+    return {
+      title: 'Finance mode: unlocked',
+      body: `You’ve logged ${txnWeek} moves in 7 days — you’re building a real money story. Peek at Finance for the vibe check.`,
+    };
   }
-}
-
-async function scheduleFamilyTimeReminder(): Promise<void> {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: "Family Time 👨‍👩‍👧‍👦",
-        body: "It's time to switch off your phone and spend some time with your family",
-        sound: true,
-        data: { type: 'family_time' },
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DAILY,
-        hour: 19,
-        minute: 30,
-      },
-    });
-    console.log('✅ Family time reminder scheduled for 7:30 PM daily');
-  } catch (error) {
-    console.error('Error scheduling family time reminder:', error);
-    throw error;
+  if (txnWeek >= 3) {
+    return {
+      title: 'Money map in motion',
+      body: `${txnWeek} entries this week. Add today’s flow so your dashboard stays honest.`,
+    };
   }
+  if (txnWeek > 0) {
+    return {
+      title: 'Gentle ledger nudge',
+      body: `Only ${txnWeek} finance tap${txnWeek === 1 ? '' : 's'} this week — 20 seconds in Finance keeps the picture clear.`,
+    };
+  }
+  return {
+    title: 'Finance misses you (lightly)',
+    body: 'No budget lecture — just log one coffee, one transfer, or one win. Silence is the heaviest line item.',
+  };
 }
 
-async function scheduleHabitReminders(habits: Habit[]): Promise<void> {
-  // Filter only active habits
-  const activeHabits = habits.filter(habit => habit.isActive);
-  
-  // Schedule one habit per hour starting at 9am
-  for (let index = 0; index < activeHabits.length; index++) {
-    const habit = activeHabits[index];
-    const hour = 9 + index; // Start at 9am, increment by 1 for each habit
-    
-    // Only schedule if hour is within valid range (9am to 11pm)
-    if (hour < 24) {
-      const habitName = habit.name.toLowerCase();
-      const isActionHabit = habitName.includes('do') || habitName.includes('exercise') || 
-                           habitName.includes('workout') || habitName.includes('practice') ||
-                           habitName.includes('read') || habitName.includes('write');
-      
-      const body = isActionHabit 
-        ? `Will I do ${habit.name} today?`
-        : `Will I be involved in ${habit.name} today?`;
+async function scheduleJournalReminders(): Promise<void> {
+  const morning = journalPromptForToday();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: morning.title,
+      body: morning.body,
+      sound: true,
+      data: { type: 'journal_reminder' },
+      ...(Platform.OS === 'android' ? { channelId: 'lifeos_journal' } : {}),
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 7,
+      minute: 30,
+    },
+  });
 
-      try {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: `Habit Reminder: ${habit.name}`,
-            body: body,
-            sound: true,
-            data: { type: 'habit_reminder', habitId: habit.id },
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.DAILY,
-            hour: hour,
-            minute: 0,
-          },
-        });
-        console.log(`✅ Scheduled habit reminder for "${habit.name}" at ${hour}:00`);
-      } catch (error) {
-        console.error(`Error scheduling reminder for habit "${habit.name}":`, error);
-      }
+  const evening = JOURNAL_PROMPTS[(new Date().getDate() + 2) % JOURNAL_PROMPTS.length];
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Evening debrief window',
+      body: evening.body,
+      sound: true,
+      data: { type: 'journal_reminder' },
+      ...(Platform.OS === 'android' ? { channelId: 'lifeos_journal' } : {}),
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 20,
+      minute: 45,
+    },
+  });
+}
+
+async function scheduleFinanceReminder(txnWeek: number): Promise<void> {
+  const { title, body } = financeCopy(txnWeek);
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title,
+      body,
+      sound: true,
+      data: { type: 'finance_reminder' },
+      ...(Platform.OS === 'android' ? { channelId: 'lifeos_finance' } : {}),
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DAILY,
+      hour: 17,
+      minute: 45,
+    },
+  });
+}
+
+async function scheduleHabitReminders(
+  habits: { id: string; name: string; isActive: boolean }[]
+): Promise<void> {
+  const active = habits.filter((h) => h.isActive);
+  for (let index = 0; index < active.length; index++) {
+    const habit = active[index];
+    const hour = 9 + index;
+    if (hour >= 24) break;
+
+    const { title, body } = habitCopy(habit, index);
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          sound: true,
+          data: { type: 'habit_reminder', habitId: habit.id },
+          ...(Platform.OS === 'android' ? { channelId: 'lifeos_habits' } : {}),
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DAILY,
+          hour,
+          minute: 5,
+        },
+      });
+    } catch (error) {
+      console.error(`Habit notification schedule failed for ${habit.name}`, error);
     }
   }
 }
 
-// Get all scheduled notifications (for debugging)
-export async function getAllScheduledNotifications(): Promise<Notifications.NotificationRequest[]> {
-  return await Notifications.getAllScheduledNotificationsAsync();
+/** Replaces legacy daily notifications: journal (2), finance (1), habits (staggered). No family-time blast. */
+export async function scheduleLifeOSNotifications(params: ScheduleLifeOSParams): Promise<void> {
+  try {
+    await ensureAndroidChannels();
+    await Notifications.cancelAllScheduledNotificationsAsync();
+    await scheduleJournalReminders();
+    await scheduleFinanceReminder(params.financeTxnCountWeek);
+    await scheduleHabitReminders(params.habits);
+    console.log(
+      `✅ LifeOS reminders: journal ×2, finance ×1, habits ×${params.habits.filter((h) => h.isActive).length}`
+    );
+  } catch (error) {
+    console.error('Error scheduling LifeOS notifications:', error);
+    throw error;
+  }
 }
 
+export async function getAllScheduledNotifications(): Promise<Notifications.NotificationRequest[]> {
+  return Notifications.getAllScheduledNotificationsAsync();
+}

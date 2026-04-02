@@ -7,12 +7,14 @@ import {
   RefreshControl,
   Modal,
   TouchableOpacity,
+  Platform,
+  DeviceEventEmitter,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Card,
   Title,
   List,
-  Switch,
   Button,
   Divider,
   Text,
@@ -20,6 +22,7 @@ import {
   TextInput,
   Chip,
   SegmentedButtons,
+  Switch,
 } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { sendTestNotification, getNotificationPermissions, requestNotificationPermissions, getAllScheduledNotifications } from '../services/notifications';
@@ -37,6 +40,10 @@ import {
   extractPageTitle,
 } from '../services/notion';
 import { useApp } from '../context/AppContext';
+import { useAuth } from '../context/AuthContext';
+import { useTabBarPreferences, TabBarOptionalTab } from '../context/TabBarPreferencesContext';
+import { scopedStorageKey } from '../services/userSession';
+import { REPLAY_TUTORIAL_EVENT } from '../components/OnboardingTutorial';
 import { Habit } from '../types';
 
 const defaultNewHabit = {
@@ -51,6 +58,15 @@ const defaultNewHabit = {
 
 const SettingsScreen = () => {
   const { state, refreshData, addCategory, updateCategory, deleteCategory, addHabit, deleteHabit } = useApp();
+  const { user, logout } = useAuth();
+  const { visibility: tabBarVisibility, setTabVisible } = useTabBarPreferences();
+
+  const tabBarRows: { key: TabBarOptionalTab; title: string; description: string }[] = [
+    { key: 'Habits', title: 'Habits', description: 'Track routines and streaks' },
+    { key: 'Journal', title: 'Journal', description: 'Daily reflections and prompts' },
+    { key: 'Finance', title: 'Finance', description: 'Transactions, budgets, investments' },
+    { key: 'Visualization', title: 'Visualization', description: 'Video and visual tools' },
+  ];
   const [refreshing, setRefreshing] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [categoryType, setCategoryType] = useState<'income' | 'expense'>('income');
@@ -331,6 +347,13 @@ const SettingsScreen = () => {
     }
   };
 
+  const handleLogout = () => {
+    Alert.alert('Log out', 'You can sign in again anytime. Unsaved changes are already saved locally.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Log out', style: 'destructive', onPress: () => void logout() },
+    ]);
+  };
+
   return (
     <ScrollView 
       style={styles.container}
@@ -346,6 +369,76 @@ const SettingsScreen = () => {
           <Text style={styles.descriptionText}>
             Your personal life operating system for habits, journaling, and finance management.
           </Text>
+          <Button
+            mode="text"
+            compact
+            icon="school-outline"
+            textColor="#6366f1"
+            style={styles.tutorialReplayButton}
+            onPress={async () => {
+              try {
+                await AsyncStorage.removeItem(scopedStorageKey('tutorial_v1_done'));
+                DeviceEventEmitter.emit(REPLAY_TUTORIAL_EVENT);
+                Alert.alert('Welcome tour', 'The introduction will appear in a moment.');
+              } catch {
+                Alert.alert('Error', 'Could not reset the tour.');
+              }
+            }}
+          >
+            Show welcome tour again
+          </Button>
+        </Card.Content>
+      </Card>
+
+      <Card style={styles.card}>
+        <Card.Content>
+          <Title style={styles.cardTitle}>Account</Title>
+          <Text style={styles.descriptionText}>
+            Signed in as <Text style={styles.accountName}>{user?.displayName}</Text>
+          </Text>
+          {user?.email ? (
+            <Text style={styles.userEmailHint} selectable>
+              {user.email}
+            </Text>
+          ) : null}
+          <Text style={styles.userIdHint} selectable>
+            User ID (same as user_id in Postgres): {user?.id ?? '—'}
+          </Text>
+          <Button
+            mode="outlined"
+            onPress={handleLogout}
+            style={styles.logoutButton}
+            textColor="#b91c1c"
+            icon="logout"
+          >
+            Log out
+          </Button>
+        </Card.Content>
+      </Card>
+
+      <Card style={styles.card}>
+        <Card.Content>
+          <Title style={styles.cardTitle}>Bottom tabs</Title>
+          <Text style={styles.descriptionText}>
+            Show or hide tabs on the bar. Home always stays. You can still open hidden areas via reminders or links.
+          </Text>
+          <Divider style={styles.divider} />
+          {tabBarRows.map((row) => (
+            <List.Item
+              key={row.key}
+              title={row.title}
+              description={row.description}
+              titleStyle={styles.tabBarListTitle}
+              descriptionStyle={styles.tabBarListDesc}
+              right={() => (
+                <Switch
+                  value={tabBarVisibility[row.key]}
+                  onValueChange={(v) => setTabVisible(row.key, v)}
+                  color="#6366f1"
+                />
+              )}
+            />
+          ))}
         </Card.Content>
       </Card>
 
@@ -620,7 +713,12 @@ const SettingsScreen = () => {
       {/* Notifications */}
       <Card style={styles.card}>
         <Card.Content>
-          <Title style={styles.cardTitle}>Notifications</Title>
+          <Title style={styles.cardTitle}>Reminders</Title>
+          <Text style={styles.descriptionText}>
+            LifeOS schedules local reminders: morning and evening journal nudges, a daily finance pulse (copy
+            adapts to how much you logged this week), and staggered habit check-ins for each active habit.
+          </Text>
+          <Divider style={styles.divider} />
           <View style={styles.notificationButtons}>
             <Button
               mode="contained"
@@ -674,27 +772,6 @@ const SettingsScreen = () => {
               Check Scheduled
             </Button>
           </View>
-          <Divider style={styles.divider} />
-          <List.Item
-            title="Habit Reminders"
-            description="Get reminded to complete your habits"
-            left={(props) => <List.Icon {...props} icon="bell" />}
-            right={() => <Switch value={true} onValueChange={() => {}} />}
-          />
-          <Divider />
-          <List.Item
-            title="Journal Prompts"
-            description="Daily prompts to write in your journal"
-            left={(props) => <List.Icon {...props} icon="book" />}
-            right={() => <Switch value={false} onValueChange={() => {}} />}
-          />
-          <Divider />
-          <List.Item
-            title="Budget Alerts"
-            description="Alerts when approaching budget limits"
-            left={(props) => <List.Icon {...props} icon="wallet" />}
-            right={() => <Switch value={true} onValueChange={() => {}} />}
-          />
         </Card.Content>
       </Card>
 
@@ -1062,6 +1139,30 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 16,
   },
+  accountName: {
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  logoutButton: {
+    marginTop: 12,
+    borderColor: '#fecaca',
+  },
+  userEmailHint: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#475569',
+  },
+  userIdHint: {
+    marginTop: 10,
+    fontSize: 11,
+    color: '#64748b',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  notificationButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
   testButton: {
     marginBottom: 16,
     backgroundColor: '#6366f1',
@@ -1113,10 +1214,23 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginBottom: 8,
   },
+  tutorialReplayButton: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
   descriptionText: {
     fontSize: 14,
     color: '#4b5563',
     lineHeight: 20,
+  },
+  tabBarListTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  tabBarListDesc: {
+    fontSize: 13,
+    color: '#6b7280',
   },
   statsContainer: {
     flexDirection: 'row',

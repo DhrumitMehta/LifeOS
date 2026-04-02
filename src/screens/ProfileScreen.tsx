@@ -16,10 +16,9 @@ import {
   Divider,
 } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Profile } from '../types';
-
-const PROFILE_STORAGE_KEY = 'lifeos_profile';
+import { supabaseDatabase } from '../database/supabaseDatabase';
+import { getActiveUserId } from '../services/userSession';
 
 const ProfileScreen = () => {
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -51,21 +50,14 @@ const ProfileScreen = () => {
   const loadProfile = async () => {
     try {
       setLoading(true);
-      const stored = await AsyncStorage.getItem(PROFILE_STORAGE_KEY);
-      if (stored) {
-        const profileData = JSON.parse(stored);
-        // Convert date strings back to Date objects
-        const profile: Profile = {
-          ...profileData,
-          createdAt: new Date(profileData.createdAt),
-          updatedAt: new Date(profileData.updatedAt),
-        };
-        setProfile(profile);
-        populateForm(profile);
+      const uid = getActiveUserId();
+      const loaded = await supabaseDatabase.getProfile();
+      if (loaded) {
+        setProfile(loaded);
+        populateForm(loaded);
       } else {
-        // Create default profile
         const defaultProfile: Profile = {
-          id: 'profile_1',
+          id: uid || 'profile_1',
           name: '',
           bio: '',
           likes: [],
@@ -101,8 +93,9 @@ const ProfileScreen = () => {
 
   const saveProfile = async () => {
     try {
+      const uid = getActiveUserId();
       const updatedProfile: Profile = {
-        id: profile?.id || 'profile_1',
+        id: uid || profile?.id || 'profile_1',
         name: name.trim(),
         bio: bio.trim(),
         likes: likes.filter(item => item.trim() !== ''),
@@ -115,7 +108,7 @@ const ProfileScreen = () => {
         updatedAt: new Date(),
       };
 
-      await AsyncStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(updatedProfile));
+      await supabaseDatabase.saveProfile(updatedProfile);
       setProfile(updatedProfile);
       setIsEditing(false);
       Alert.alert('Success', 'Profile saved successfully!');

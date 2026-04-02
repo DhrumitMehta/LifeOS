@@ -1,15 +1,63 @@
-import { supabase } from '../config/supabase';
-import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Subscription, Review } from '../types';
+import { supabase, isSupabaseConfigured } from '../config/supabase';
+import {
+  Habit,
+  HabitEntry,
+  JournalEntry,
+  Transaction,
+  Investment,
+  Budget,
+  Account,
+  Subscription,
+  Review,
+  Profile,
+} from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { offlineSync } from '../services/offlineSync';
+import { scopedStorageKey, getActiveUserId } from '../services/userSession';
 
 class SupabaseDatabase {
   private useSupabase: boolean = true;
 
+  private k(short: string): string {
+    return scopedStorageKey(short);
+  }
+
+  private requireUserId(): string {
+    const id = getActiveUserId();
+    if (!id) {
+      throw new Error('LifeOS: signed-in user required for Supabase');
+    }
+    return id;
+  }
+
+  /** Row payload for insert/replace with `user_id` set (via camelCase → snake_case). */
+  private serializeRowForDb<T extends Record<string, any>>(entity: T): Record<string, any> {
+    return this.serializeDates({ ...entity, userId: this.requireUserId() });
+  }
+
+  private deserializeEntity<T>(row: Record<string, any>): T {
+    const o = this.deserializeDates(row) as Record<string, unknown>;
+    delete o.userId;
+    return o as T;
+  }
+
+  private serializeReviewForDb(review: Review): Record<string, any> {
+    const serialized = this.serializeRowForDb(review as unknown as Record<string, any>);
+    if (serialized.journal_stats) {
+      serialized.journal_stats = JSON.stringify(serialized.journal_stats);
+    }
+    if (serialized.habit_stats) {
+      serialized.habit_stats = JSON.stringify(serialized.habit_stats);
+    }
+    if (serialized.finance_stats) {
+      serialized.finance_stats = JSON.stringify(serialized.finance_stats);
+    }
+    return serialized;
+  }
+
   async init(): Promise<void> {
     try {
-      // Check if Supabase is properly configured
-      if (supabase.supabaseUrl === 'YOUR_SUPABASE_URL' || supabase.supabaseKey === 'YOUR_SUPABASE_ANON_KEY') {
+      if (!isSupabaseConfigured()) {
         console.log('Supabase not configured, falling back to AsyncStorage');
         this.useSupabase = false;
       } else {
@@ -90,35 +138,36 @@ class SupabaseDatabase {
   // Habits
   getHabits = async (): Promise<Habit[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Habit>('lifeos_habits');
+      return this.getAsyncStorageData<Habit>(this.k('habits'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('habits')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(habit => this.deserializeDates(habit)) || [];
+      return data?.map((habit) => this.deserializeEntity<Habit>(habit)) || [];
     } catch (error) {
       console.error('Error getting habits:', error);
-      return this.getAsyncStorageData<Habit>('lifeos_habits');
+      return this.getAsyncStorageData<Habit>(this.k('habits'));
     }
   }
 
   saveHabits = async (habits: Habit[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_habits', habits);
+      return this.setAsyncStorageData(this.k('habits'), habits);
     }
 
     try {
-      const serializedHabits = habits.map(habit => this.serializeDates(habit));
-      
-      // First, clear existing habits
-      await supabase.from('habits').delete().neq('id', '');
-      
-      // Then insert all habits
+      const uid = this.requireUserId();
+      const serializedHabits = habits.map((habit) => this.serializeRowForDb(habit));
+
+      await supabase.from('habits').delete().eq('user_id', uid);
+
       if (serializedHabits.length > 0) {
         const { error } = await supabase
           .from('habits')
@@ -128,43 +177,45 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving habits:', error);
-      return this.setAsyncStorageData('lifeos_habits', habits);
+      return this.setAsyncStorageData(this.k('habits'), habits);
     }
   }
 
   // Habit Entries
   getHabitEntries = async (): Promise<HabitEntry[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
+      return this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('habit_entries')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(entry => this.deserializeDates(entry)) || [];
+      return data?.map((entry) => this.deserializeEntity<HabitEntry>(entry)) || [];
     } catch (error) {
       console.error('Error getting habit entries:', error);
-      return this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
+      return this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
     }
   }
 
   saveHabitEntries = async (entries: HabitEntry[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_habit_entries', entries);
+      return this.setAsyncStorageData(this.k('habit_entries'), entries);
     }
 
     try {
       // For now, use the replace all approach but this should be improved
       // with individual CRUD operations in a real app
-      const serializedEntries = entries.map(entry => this.serializeDates(entry));
-      
-      // Clear and insert all entries (temporary solution)
-      await supabase.from('habit_entries').delete().neq('id', '');
-      
+      const uid = this.requireUserId();
+      const serializedEntries = entries.map((entry) => this.serializeRowForDb(entry));
+
+      await supabase.from('habit_entries').delete().eq('user_id', uid);
+
       if (serializedEntries.length > 0) {
         const { error } = await supabase
           .from('habit_entries')
@@ -174,20 +225,20 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving habit entries:', error);
-      return this.setAsyncStorageData('lifeos_habit_entries', entries);
+      return this.setAsyncStorageData(this.k('habit_entries'), entries);
     }
   }
 
   // Individual CRUD methods for better data management
   addHabit = async (habit: Habit): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<Habit>('lifeos_habits');
-      await this.setAsyncStorageData('lifeos_habits', [...existing, habit]);
+      const existing = await this.getAsyncStorageData<Habit>(this.k('habits'));
+      await this.setAsyncStorageData(this.k('habits'), [...existing, habit]);
       return;
     }
 
     try {
-      const serializedHabit = this.serializeDates(habit);
+      const serializedHabit = this.serializeRowForDb(habit);
       const { error } = await supabase
         .from('habits')
         .insert(serializedHabit);
@@ -196,8 +247,8 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error adding habit:', error);
       // Fallback to AsyncStorage
-      const existing = await this.getAsyncStorageData<Habit>('lifeos_habits');
-      await this.setAsyncStorageData('lifeos_habits', [...existing, habit]);
+      const existing = await this.getAsyncStorageData<Habit>(this.k('habits'));
+      await this.setAsyncStorageData(this.k('habits'), [...existing, habit]);
       
       // Queue for sync when online
       await offlineSync.queueOperation('create', 'habits', habit);
@@ -206,13 +257,13 @@ class SupabaseDatabase {
 
   addHabitEntry = async (entry: HabitEntry): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
-      await this.setAsyncStorageData('lifeos_habit_entries', [...existing, entry]);
+      const existing = await this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
+      await this.setAsyncStorageData(this.k('habit_entries'), [...existing, entry]);
       return;
     }
 
     try {
-      const serializedEntry = this.serializeDates(entry);
+      const serializedEntry = this.serializeRowForDb(entry);
       const { error } = await supabase
         .from('habit_entries')
         .insert(serializedEntry);
@@ -221,8 +272,8 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error adding habit entry:', error);
       // Save to AsyncStorage as fallback
-      const existing = await this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
-      await this.setAsyncStorageData('lifeos_habit_entries', [...existing, entry]);
+      const existing = await this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
+      await this.setAsyncStorageData(this.k('habit_entries'), [...existing, entry]);
       
       // Queue for sync when online
       await offlineSync.queueOperation('create', 'habit_entries', entry);
@@ -231,26 +282,27 @@ class SupabaseDatabase {
 
   deleteHabit = async (habitId: string): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<Habit>('lifeos_habits');
+      const existing = await this.getAsyncStorageData<Habit>(this.k('habits'));
       const filtered = existing.filter(habit => habit.id !== habitId);
-      await this.setAsyncStorageData('lifeos_habits', filtered);
+      await this.setAsyncStorageData(this.k('habits'), filtered);
       return;
     }
 
     try {
-      // Delete the habit
+      const uid = this.requireUserId();
       const { error: habitError } = await supabase
         .from('habits')
         .delete()
-        .eq('id', habitId);
-      
+        .eq('id', habitId)
+        .eq('user_id', uid);
+
       if (habitError) throw habitError;
 
-      // Also delete related habit entries (optional - you might want to keep them for analytics)
       const { error: entriesError } = await supabase
         .from('habit_entries')
         .delete()
-        .eq('habit_id', habitId);
+        .eq('habit_id', habitId)
+        .eq('user_id', uid);
       
       if (entriesError) {
         console.warn('Error deleting habit entries:', entriesError);
@@ -259,68 +311,71 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error deleting habit:', error);
       // Fallback to AsyncStorage
-      const existing = await this.getAsyncStorageData<Habit>('lifeos_habits');
+      const existing = await this.getAsyncStorageData<Habit>(this.k('habits'));
       const filtered = existing.filter(habit => habit.id !== habitId);
-      await this.setAsyncStorageData('lifeos_habits', filtered);
+      await this.setAsyncStorageData(this.k('habits'), filtered);
     }
   }
 
   deleteHabitEntry = async (entryId: string): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
+      const existing = await this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
       const filtered = existing.filter(entry => entry.id !== entryId);
-      await this.setAsyncStorageData('lifeos_habit_entries', filtered);
+      await this.setAsyncStorageData(this.k('habit_entries'), filtered);
       return;
     }
 
     try {
+      const uid = this.requireUserId();
       const { error } = await supabase
         .from('habit_entries')
         .delete()
-        .eq('id', entryId);
+        .eq('id', entryId)
+        .eq('user_id', uid);
       
       if (error) throw error;
     } catch (error) {
       console.error('Error deleting habit entry:', error);
       // Fallback to AsyncStorage
-      const existing = await this.getAsyncStorageData<HabitEntry>('lifeos_habit_entries');
+      const existing = await this.getAsyncStorageData<HabitEntry>(this.k('habit_entries'));
       const filtered = existing.filter(entry => entry.id !== entryId);
-      await this.setAsyncStorageData('lifeos_habit_entries', filtered);
+      await this.setAsyncStorageData(this.k('habit_entries'), filtered);
     }
   }
 
   // Journal Entries
   getJournalEntries = async (): Promise<JournalEntry[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      return this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('journal_entries')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(entry => this.deserializeDates(entry)) || [];
+      return data?.map((entry) => this.deserializeEntity<JournalEntry>(entry)) || [];
     } catch (error) {
       console.error('Error getting journal entries:', error);
-      return this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      return this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
     }
   }
 
   saveJournalEntries = async (entries: JournalEntry[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_journal_entries', entries);
+      return this.setAsyncStorageData(this.k('journal_entries'), entries);
     }
 
     try {
-      const serializedEntries = entries.map(entry => this.serializeDates(entry));
-      
-      // First, clear existing entries
-      await supabase.from('journal_entries').delete().neq('id', '');
-      
-      // Then insert all entries
+      const uid = this.requireUserId();
+      const serializedEntries = entries.map((entry) => this.serializeRowForDb(entry));
+
+      await supabase.from('journal_entries').delete().eq('user_id', uid);
+
       if (serializedEntries.length > 0) {
         const { error } = await supabase
           .from('journal_entries')
@@ -330,20 +385,20 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving journal entries:', error);
-      return this.setAsyncStorageData('lifeos_journal_entries', entries);
+      return this.setAsyncStorageData(this.k('journal_entries'), entries);
     }
   }
 
   // Individual CRUD methods for journal entries
   addJournalEntry = async (entry: JournalEntry): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
-      await this.setAsyncStorageData('lifeos_journal_entries', [...existing, entry]);
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
+      await this.setAsyncStorageData(this.k('journal_entries'), [...existing, entry]);
       return;
     }
 
     try {
-      const serializedEntry = this.serializeDates(entry);
+      const serializedEntry = this.serializeRowForDb(entry);
       const { error } = await supabase
         .from('journal_entries')
         .insert(serializedEntry);
@@ -352,8 +407,8 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error adding journal entry:', error);
       // Save to AsyncStorage as fallback
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
-      await this.setAsyncStorageData('lifeos_journal_entries', [...existing, entry]);
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
+      await this.setAsyncStorageData(this.k('journal_entries'), [...existing, entry]);
       
       // Queue for sync when online
       await offlineSync.queueOperation('create', 'journal_entries', entry);
@@ -362,61 +417,66 @@ class SupabaseDatabase {
 
   updateJournalEntry = async (entry: JournalEntry): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
       const updated = existing.map(e => e.id === entry.id ? entry : e);
-      await this.setAsyncStorageData('lifeos_journal_entries', updated);
+      await this.setAsyncStorageData(this.k('journal_entries'), updated);
       return;
     }
 
     try {
-      const serializedEntry = this.serializeDates(entry);
+      const uid = this.requireUserId();
+      const serializedEntry = this.serializeRowForDb(entry);
       const { error } = await supabase
         .from('journal_entries')
         .update(serializedEntry)
-        .eq('id', entry.id);
+        .eq('id', entry.id)
+        .eq('user_id', uid);
       
       if (error) throw error;
     } catch (error) {
       console.error('Error updating journal entry:', error);
       // Fallback to AsyncStorage
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
       const updated = existing.map(e => e.id === entry.id ? entry : e);
-      await this.setAsyncStorageData('lifeos_journal_entries', updated);
+      await this.setAsyncStorageData(this.k('journal_entries'), updated);
     }
   }
 
   deleteJournalEntry = async (entryId: string): Promise<void> => {
     if (!this.useSupabase) {
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
       const filtered = existing.filter(entry => entry.id !== entryId);
-      await this.setAsyncStorageData('lifeos_journal_entries', filtered);
+      await this.setAsyncStorageData(this.k('journal_entries'), filtered);
       return;
     }
 
     try {
+      const uid = this.requireUserId();
       const { error } = await supabase
         .from('journal_entries')
         .delete()
-        .eq('id', entryId);
+        .eq('id', entryId)
+        .eq('user_id', uid);
       
       if (error) throw error;
     } catch (error) {
       console.error('Error deleting journal entry:', error);
       // Fallback to AsyncStorage
-      const existing = await this.getAsyncStorageData<JournalEntry>('lifeos_journal_entries');
+      const existing = await this.getAsyncStorageData<JournalEntry>(this.k('journal_entries'));
       const filtered = existing.filter(entry => entry.id !== entryId);
-      await this.setAsyncStorageData('lifeos_journal_entries', filtered);
+      await this.setAsyncStorageData(this.k('journal_entries'), filtered);
     }
   }
 
   // Transactions
   getTransactions = async (): Promise<Transaction[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Transaction>('lifeos_transactions');
+      return this.getAsyncStorageData<Transaction>(this.k('transactions'));
     }
 
     try {
       // Fetch all transactions with pagination to avoid 1000 row limit
+      const uid = this.requireUserId();
       let allTransactions: any[] = [];
       let page = 0;
       const pageSize = 1000;
@@ -426,6 +486,7 @@ class SupabaseDatabase {
         const { data, error } = await supabase
           .from('transactions')
           .select('*')
+          .eq('user_id', uid)
           .order('created_at', { ascending: false })
           .range(page * pageSize, (page + 1) * pageSize - 1);
 
@@ -441,25 +502,24 @@ class SupabaseDatabase {
       }
 
       console.log(`Fetched ${allTransactions.length} transactions from Supabase`);
-      return allTransactions.map(transaction => this.deserializeDates(transaction)) || [];
+      return allTransactions.map((transaction) => this.deserializeEntity<Transaction>(transaction)) || [];
     } catch (error) {
       console.error('Error getting transactions:', error);
-      return this.getAsyncStorageData<Transaction>('lifeos_transactions');
+      return this.getAsyncStorageData<Transaction>(this.k('transactions'));
     }
   }
 
   saveTransactions = async (transactions: Transaction[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_transactions', transactions);
+      return this.setAsyncStorageData(this.k('transactions'), transactions);
     }
 
     try {
-      const serializedTransactions = transactions.map(transaction => this.serializeDates(transaction));
-      
-      // First, clear existing transactions
-      await supabase.from('transactions').delete().neq('id', '');
-      
-      // Then insert all transactions
+      const uid = this.requireUserId();
+      const serializedTransactions = transactions.map((transaction) => this.serializeRowForDb(transaction));
+
+      await supabase.from('transactions').delete().eq('user_id', uid);
+
       if (serializedTransactions.length > 0) {
         const { error } = await supabase
           .from('transactions')
@@ -470,7 +530,7 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error saving transactions:', error);
       // Fallback to AsyncStorage
-      await this.setAsyncStorageData('lifeos_transactions', transactions);
+      await this.setAsyncStorageData(this.k('transactions'), transactions);
       // The AsyncStorage sync will handle syncing these when online
     }
   }
@@ -478,35 +538,36 @@ class SupabaseDatabase {
   // Investments
   getInvestments = async (): Promise<Investment[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Investment>('lifeos_investments');
+      return this.getAsyncStorageData<Investment>(this.k('investments'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('investments')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(investment => this.deserializeDates(investment)) || [];
+      return data?.map((investment) => this.deserializeEntity<Investment>(investment)) || [];
     } catch (error) {
       console.error('Error getting investments:', error);
-      return this.getAsyncStorageData<Investment>('lifeos_investments');
+      return this.getAsyncStorageData<Investment>(this.k('investments'));
     }
   }
 
   saveInvestments = async (investments: Investment[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_investments', investments);
+      return this.setAsyncStorageData(this.k('investments'), investments);
     }
 
     try {
-      const serializedInvestments = investments.map(investment => this.serializeDates(investment));
-      
-      // First, clear existing investments
-      await supabase.from('investments').delete().neq('id', '');
-      
-      // Then insert all investments
+      const uid = this.requireUserId();
+      const serializedInvestments = investments.map((investment) => this.serializeRowForDb(investment));
+
+      await supabase.from('investments').delete().eq('user_id', uid);
+
       if (serializedInvestments.length > 0) {
         const { error } = await supabase
           .from('investments')
@@ -516,42 +577,43 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving investments:', error);
-      return this.setAsyncStorageData('lifeos_investments', investments);
+      return this.setAsyncStorageData(this.k('investments'), investments);
     }
   }
 
   // Budgets
   getBudgets = async (): Promise<Budget[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Budget>('lifeos_budgets');
+      return this.getAsyncStorageData<Budget>(this.k('budgets'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('budgets')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(budget => this.deserializeDates(budget)) || [];
+      return data?.map((budget) => this.deserializeEntity<Budget>(budget)) || [];
     } catch (error) {
       console.error('Error getting budgets:', error);
-      return this.getAsyncStorageData<Budget>('lifeos_budgets');
+      return this.getAsyncStorageData<Budget>(this.k('budgets'));
     }
   }
 
   saveBudgets = async (budgets: Budget[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_budgets', budgets);
+      return this.setAsyncStorageData(this.k('budgets'), budgets);
     }
 
     try {
-      const serializedBudgets = budgets.map(budget => this.serializeDates(budget));
-      
-      // First, clear existing budgets
-      await supabase.from('budgets').delete().neq('id', '');
-      
-      // Then insert all budgets
+      const uid = this.requireUserId();
+      const serializedBudgets = budgets.map((budget) => this.serializeRowForDb(budget));
+
+      await supabase.from('budgets').delete().eq('user_id', uid);
+
       if (serializedBudgets.length > 0) {
         const { error } = await supabase
           .from('budgets')
@@ -561,42 +623,43 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving budgets:', error);
-      return this.setAsyncStorageData('lifeos_budgets', budgets);
+      return this.setAsyncStorageData(this.k('budgets'), budgets);
     }
   }
 
   // Accounts
   getAccounts = async (): Promise<Account[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Account>('lifeos_accounts');
+      return this.getAsyncStorageData<Account>(this.k('accounts'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('accounts')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map(account => this.deserializeDates(account)) || [];
+      return data?.map((account) => this.deserializeEntity<Account>(account)) || [];
     } catch (error) {
       console.error('Error getting accounts:', error);
-      return this.getAsyncStorageData<Account>('lifeos_accounts');
+      return this.getAsyncStorageData<Account>(this.k('accounts'));
     }
   }
 
   saveAccounts = async (accounts: Account[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_accounts', accounts);
+      return this.setAsyncStorageData(this.k('accounts'), accounts);
     }
 
     try {
-      const serializedAccounts = accounts.map(account => this.serializeDates(account));
-      
-      // First, clear existing accounts
-      await supabase.from('accounts').delete().neq('id', '');
-      
-      // Then insert all accounts
+      const uid = this.requireUserId();
+      const serializedAccounts = accounts.map((account) => this.serializeRowForDb(account));
+
+      await supabase.from('accounts').delete().eq('user_id', uid);
+
       if (serializedAccounts.length > 0) {
         const { error } = await supabase
           .from('accounts')
@@ -606,42 +669,43 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving accounts:', error);
-      return this.setAsyncStorageData('lifeos_accounts', accounts);
+      return this.setAsyncStorageData(this.k('accounts'), accounts);
     }
   }
 
   // Subscriptions
   getSubscriptions = async (): Promise<Subscription[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Subscription>('lifeos_subscriptions');
+      return this.getAsyncStorageData<Subscription>(this.k('subscriptions'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('subscriptions')
         .select('*')
+        .eq('user_id', uid)
         .order('recurring_date', { ascending: true });
 
       if (error) throw error;
-      return data?.map(sub => this.deserializeDates(sub)) || [];
+      return data?.map((sub) => this.deserializeEntity<Subscription>(sub)) || [];
     } catch (error) {
       console.error('Error getting subscriptions:', error);
-      return this.getAsyncStorageData<Subscription>('lifeos_subscriptions');
+      return this.getAsyncStorageData<Subscription>(this.k('subscriptions'));
     }
   };
 
   saveSubscriptions = async (subscriptions: Subscription[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_subscriptions', subscriptions);
+      return this.setAsyncStorageData(this.k('subscriptions'), subscriptions);
     }
 
     try {
-      const serializedSubscriptions = subscriptions.map(sub => this.serializeDates(sub));
-      
-      // First, clear existing subscriptions
-      await supabase.from('subscriptions').delete().neq('id', '');
-      
-      // Then insert all subscriptions
+      const uid = this.requireUserId();
+      const serializedSubscriptions = subscriptions.map((sub) => this.serializeRowForDb(sub));
+
+      await supabase.from('subscriptions').delete().eq('user_id', uid);
+
       if (serializedSubscriptions.length > 0) {
         const { error } = await supabase
           .from('subscriptions')
@@ -651,7 +715,7 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving subscriptions:', error);
-      return this.setAsyncStorageData('lifeos_subscriptions', subscriptions);
+      return this.setAsyncStorageData(this.k('subscriptions'), subscriptions);
     }
   };
 
@@ -663,7 +727,7 @@ class SupabaseDatabase {
     }
 
     try {
-      const serialized = this.serializeDates(subscription);
+      const serialized = this.serializeRowForDb(subscription);
       const { error } = await supabase
         .from('subscriptions')
         .insert(serialized);
@@ -689,11 +753,13 @@ class SupabaseDatabase {
     }
 
     try {
-      const serialized = this.serializeDates(subscription);
+      const uid = this.requireUserId();
+      const serialized = this.serializeRowForDb(subscription);
       const { error } = await supabase
         .from('subscriptions')
         .update(serialized)
-        .eq('id', subscription.id);
+        .eq('id', subscription.id)
+        .eq('user_id', uid);
       
       if (error) throw error;
     } catch (error) {
@@ -715,10 +781,12 @@ class SupabaseDatabase {
     }
 
     try {
+      const uid = this.requireUserId();
       const { error } = await supabase
         .from('subscriptions')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_id', uid);
       
       if (error) throw error;
     } catch (error) {
@@ -732,13 +800,15 @@ class SupabaseDatabase {
   // Reviews
   getReviews = async (): Promise<Review[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Review>('lifeos_reviews');
+      return this.getAsyncStorageData<Review>(this.k('reviews'));
     }
 
     try {
+      const uid = this.requireUserId();
       const { data, error } = await supabase
         .from('reviews')
         .select('*')
+        .eq('user_id', uid)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -746,56 +816,44 @@ class SupabaseDatabase {
       if (!data) return [];
 
       return data.map((item: any) => {
-        const review = this.deserializeDates(item);
-        // Parse JSON fields
+        const review = this.deserializeEntity<Review>(item);
         if (review.journalStats) {
-          review.journalStats = typeof review.journalStats === 'string' 
-            ? JSON.parse(review.journalStats) 
-            : review.journalStats;
+          review.journalStats =
+            typeof review.journalStats === 'string'
+              ? JSON.parse(review.journalStats)
+              : review.journalStats;
         }
         if (review.habitStats) {
-          review.habitStats = typeof review.habitStats === 'string' 
-            ? JSON.parse(review.habitStats) 
-            : review.habitStats;
+          review.habitStats =
+            typeof review.habitStats === 'string'
+              ? JSON.parse(review.habitStats)
+              : review.habitStats;
         }
         if (review.financeStats) {
-          review.financeStats = typeof review.financeStats === 'string' 
-            ? JSON.parse(review.financeStats) 
-            : review.financeStats;
+          review.financeStats =
+            typeof review.financeStats === 'string'
+              ? JSON.parse(review.financeStats)
+              : review.financeStats;
         }
         return review;
       });
     } catch (error) {
       console.error('Error getting reviews:', error);
-      return this.getAsyncStorageData<Review>('lifeos_reviews');
+      return this.getAsyncStorageData<Review>(this.k('reviews'));
     }
   };
 
   saveReviews = async (reviews: Review[]): Promise<void> => {
     if (!this.useSupabase) {
-      return this.setAsyncStorageData('lifeos_reviews', reviews);
+      return this.setAsyncStorageData(this.k('reviews'), reviews);
     }
 
     try {
-      // Serialize complex objects to JSON
-      const serializedReviews = reviews.map(review => {
-        const serialized = this.serializeDates(review);
-        if (serialized.journalStats) {
-          serialized.journalStats = JSON.stringify(serialized.journalStats);
-        }
-        if (serialized.habitStats) {
-          serialized.habitStats = JSON.stringify(serialized.habitStats);
-        }
-        if (serialized.financeStats) {
-          serialized.financeStats = JSON.stringify(serialized.financeStats);
-        }
-        return serialized;
-      });
+      const uid = this.requireUserId();
+      const serializedReviews = reviews.map((review) => this.serializeReviewForDb(review));
 
-      // First, clear existing reviews
-      await supabase.from('reviews').delete().neq('id', '');
+      await supabase.from('reviews').delete().eq('user_id', uid);
 
-      // Then insert all reviews
       if (serializedReviews.length > 0) {
         const { error } = await supabase
           .from('reviews')
@@ -805,31 +863,21 @@ class SupabaseDatabase {
       }
     } catch (error) {
       console.error('Error saving reviews:', error);
-      return this.setAsyncStorageData('lifeos_reviews', reviews);
+      return this.setAsyncStorageData(this.k('reviews'), reviews);
     }
   };
 
   addReview = async (review: Review): Promise<void> => {
     if (!this.useSupabase) {
       console.log('Using AsyncStorage for reviews');
-      const existing = await this.getAsyncStorageData<Review>('lifeos_reviews');
-      await this.setAsyncStorageData('lifeos_reviews', [...existing, review]);
+      const existing = await this.getAsyncStorageData<Review>(this.k('reviews'));
+      await this.setAsyncStorageData(this.k('reviews'), [...existing, review]);
       return;
     }
 
     try {
       console.log('Adding review to Supabase:', review.id);
-      const serializedReview = this.serializeDates(review);
-      // Serialize complex objects to JSON
-      if (serializedReview.journalStats) {
-        serializedReview.journalStats = JSON.stringify(serializedReview.journalStats);
-      }
-      if (serializedReview.habitStats) {
-        serializedReview.habitStats = JSON.stringify(serializedReview.habitStats);
-      }
-      if (serializedReview.financeStats) {
-        serializedReview.financeStats = JSON.stringify(serializedReview.financeStats);
-      }
+      const serializedReview = this.serializeReviewForDb(review);
 
       console.log('Serialized review:', serializedReview);
 
@@ -847,8 +895,8 @@ class SupabaseDatabase {
     } catch (error) {
       console.error('Error adding review to Supabase, falling back to AsyncStorage:', error);
       // Save to AsyncStorage as fallback
-      const existing = await this.getAsyncStorageData<Review>('lifeos_reviews');
-      await this.setAsyncStorageData('lifeos_reviews', [...existing, review]);
+      const existing = await this.getAsyncStorageData<Review>(this.k('reviews'));
+      await this.setAsyncStorageData(this.k('reviews'), [...existing, review]);
 
       // Queue for sync when online
       try {
@@ -872,18 +920,9 @@ class SupabaseDatabase {
     }
 
     try {
+      const uid = this.requireUserId();
       console.log('Updating review in Supabase:', review.id);
-      const serializedReview = this.serializeDates(review);
-      // Serialize complex objects to JSON
-      if (serializedReview.journalStats) {
-        serializedReview.journalStats = JSON.stringify(serializedReview.journalStats);
-      }
-      if (serializedReview.habitStats) {
-        serializedReview.habitStats = JSON.stringify(serializedReview.habitStats);
-      }
-      if (serializedReview.financeStats) {
-        serializedReview.financeStats = JSON.stringify(serializedReview.financeStats);
-      }
+      const serializedReview = this.serializeReviewForDb(review);
 
       console.log('Serialized review for update:', serializedReview);
 
@@ -891,6 +930,7 @@ class SupabaseDatabase {
         .from('reviews')
         .update(serializedReview)
         .eq('id', review.id)
+        .eq('user_id', uid)
         .select();
 
       if (error) {
@@ -918,10 +958,12 @@ class SupabaseDatabase {
     }
 
     try {
+      const uid = this.requireUserId();
       const { error } = await supabase
         .from('reviews')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('user_id', uid);
 
       if (error) throw error;
     } catch (error) {
@@ -929,6 +971,152 @@ class SupabaseDatabase {
       const reviews = await this.getReviews();
       const filtered = reviews.filter(r => r.id !== id);
       return this.saveReviews(filtered);
+    }
+  };
+
+  private parseProfileStringArray(value: unknown): string[] {
+    if (Array.isArray(value)) return value.filter((x) => typeof x === 'string');
+    if (typeof value === 'string') {
+      try {
+        const p = JSON.parse(value);
+        return Array.isArray(p) ? p.filter((x: unknown) => typeof x === 'string') : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  private profileFromRow(row: Record<string, any>): Profile {
+    return {
+      id: row.user_id ?? row.id ?? '',
+      name: row.name ?? '',
+      bio: row.bio ?? '',
+      likes: this.parseProfileStringArray(row.likes),
+      principles: this.parseProfileStringArray(row.principles),
+      strengths: this.parseProfileStringArray(row.strengths),
+      weaknesses: this.parseProfileStringArray(row.weaknesses),
+      goals: this.parseProfileStringArray(row.goals),
+      interests: this.parseProfileStringArray(row.interests),
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    };
+  }
+
+  private profileToSupabaseRow(profile: Profile, userId: string): Record<string, unknown> {
+    return {
+      user_id: userId,
+      name: profile.name ?? '',
+      bio: profile.bio ?? '',
+      likes: profile.likes ?? [],
+      principles: profile.principles ?? [],
+      strengths: profile.strengths ?? [],
+      weaknesses: profile.weaknesses ?? [],
+      goals: profile.goals ?? [],
+      interests: profile.interests ?? [],
+      created_at: profile.createdAt.toISOString(),
+      updated_at: profile.updatedAt.toISOString(),
+    };
+  }
+
+  /** My Profile: device-only AsyncStorage when cloud off; `profiles` table when Supabase is on. */
+  getProfile = async (): Promise<Profile | null> => {
+    if (!this.useSupabase) {
+      try {
+        const raw = await AsyncStorage.getItem(this.k('profile'));
+        if (!raw) return null;
+        const d = JSON.parse(raw);
+        return {
+          ...d,
+          createdAt: new Date(d.createdAt),
+          updatedAt: new Date(d.updatedAt),
+        };
+      } catch (e) {
+        console.error('getProfile AsyncStorage:', e);
+        return null;
+      }
+    }
+
+    try {
+      const uid = this.requireUserId();
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', uid)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (data) return this.profileFromRow(data);
+
+      const raw = await AsyncStorage.getItem(this.k('profile'));
+      if (raw) {
+        const d = JSON.parse(raw);
+        const local: Profile = {
+          ...d,
+          id: uid,
+          createdAt: new Date(d.createdAt),
+          updatedAt: new Date(d.updatedAt),
+        };
+        try {
+          const row = this.profileToSupabaseRow(local, uid);
+          await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
+        } catch (e) {
+          console.warn('Profile cloud sync skipped:', e);
+        }
+        return local;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting profile from Supabase:', error);
+      try {
+        const raw = await AsyncStorage.getItem(this.k('profile'));
+        if (!raw) return null;
+        const d = JSON.parse(raw);
+        return {
+          ...d,
+          createdAt: new Date(d.createdAt),
+          updatedAt: new Date(d.updatedAt),
+        };
+      } catch {
+        return null;
+      }
+    }
+  };
+
+  saveProfile = async (profile: Profile): Promise<void> => {
+    if (!this.useSupabase) {
+      await AsyncStorage.setItem(this.k('profile'), JSON.stringify(profile));
+      return;
+    }
+
+    try {
+      const uid = this.requireUserId();
+      const row = this.profileToSupabaseRow(
+        {
+          ...profile,
+          id: uid,
+          createdAt: profile.createdAt,
+          updatedAt: profile.updatedAt,
+        },
+        uid
+      );
+
+      const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'user_id' });
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving profile to Supabase:', error);
+      try {
+        const uid = getActiveUserId();
+        if (uid) {
+          await AsyncStorage.setItem(
+            this.k('profile'),
+            JSON.stringify({ ...profile, id: uid })
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+      throw error;
     }
   };
 

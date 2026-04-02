@@ -4,6 +4,20 @@ import { supabaseDatabase } from '../database/supabaseDatabase';
 import { Habit, HabitEntry, JournalEntry, Transaction, Investment, Budget, Account, Analytics, Subscription } from '../types';
 import { scheduleLifeOSNotifications } from '../services/notifications';
 import { scopedStorageKey } from '../services/userSession';
+import { netTransactionDeltaForAccountName } from '../utils/financeAccounts';
+
+/** One-time: legacy profile only — reclassify Loan → Loan repaid so Finance “Loans” card starts at 0 without changing amounts/accounts. */
+const LOAN_CATEGORY_RESET_KEY = 'loan_category_reset_v1';
+
+function hasLegacyFinanceTransactionShape(transactions: Transaction[]): boolean {
+  return (
+    transactions.some((t) => t.account === 'NMB Main A/C') ||
+    transactions.some((t) => t.account === 'NMB Virtual Card' || t.account === 'NMB Virtual') ||
+    transactions.some((t) => t.account === 'Airtel Money' || t.account === 'Mobile') ||
+    transactions.some((t) => t.account === 'Selcom') ||
+    transactions.some((t) => t.account === 'Cash')
+  );
+}
 
 interface TransactionCategories {
   income: string[];
@@ -403,8 +417,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const journalEntries = await supabaseDatabase.getJournalEntries();
       dispatch({ type: 'SET_JOURNAL_ENTRIES', payload: journalEntries });
 
-      // Load transactions
-      const transactions = await supabaseDatabase.getTransactions();
+      // Load transactions (optional one-time loan category reset for legacy data — does not change amounts or accounts)
+      let transactions = await supabaseDatabase.getTransactions();
+      const loanResetDone = await AsyncStorage.getItem(scopedStorageKey(LOAN_CATEGORY_RESET_KEY));
+      if (!loanResetDone) {
+        if (hasLegacyFinanceTransactionShape(transactions)) {
+          const hasLoanCategory = transactions.some(
+            (t) => (t.category || '').trim().toLowerCase() === 'loan'
+          );
+          if (hasLoanCategory) {
+            const now = new Date();
+            const migrated = transactions.map((t) =>
+              (t.category || '').trim().toLowerCase() === 'loan'
+                ? { ...t, category: 'Loan repaid', updatedAt: now }
+                : t
+            );
+            await supabaseDatabase.saveTransactions(migrated);
+            transactions = migrated;
+          }
+        }
+        await AsyncStorage.setItem(scopedStorageKey(LOAN_CATEGORY_RESET_KEY), '1');
+      }
       dispatch({ type: 'SET_TRANSACTIONS', payload: transactions });
 
       // Load investments
@@ -415,8 +448,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const budgets = await supabaseDatabase.getBudgets();
       dispatch({ type: 'SET_BUDGETS', payload: budgets });
 
-      // Load accounts
-      const accounts = await supabaseDatabase.getAccounts();
+      // Load accounts (seed if empty; do NOT change transactions)
+      let accounts = await supabaseDatabase.getAccounts();
+      if (accounts.length === 0) {
+        const now = new Date();
+        const mk = (i: number, partial: Omit<Account, 'id' | 'createdAt' | 'updatedAt'>): Account => ({
+          id: `acc_${Date.now()}_${i}`,
+          createdAt: now,
+          updatedAt: now,
+          ...partial,
+        });
+
+        // If we detect legacy finance transactions, preserve the first user's visible balances exactly.
+        if (hasLegacyFinanceTransactionShape(transactions)) {
+          const targets: Record<string, number> = {
+            Cash: 459_400,
+            'Airtel Money': 337_641.35,
+            'NMB Main A/C': 627_849.17,
+            'NMB Virtual Card': 113_818.35,
+            Selcom: 655.75,
+          };
+
+          const opening = (name: string) => targets[name] - netTransactionDeltaForAccountName(name, transactions);
+
+          accounts = [
+            mk(0, { name: 'Cash', type: 'cash', balance: opening('Cash'), currency: 'TZS', isActive: true }),
+            mk(1, {
+              name: 'Airtel Money',
+              type: 'other',
+              balance: opening('Airtel Money'),
+              currency: 'TZS',
+              isActive: true,
+            }),
+            mk(2, {
+              name: 'NMB Main A/C',
+              type: 'checking',
+              balance: opening('NMB Main A/C'),
+              currency: 'TZS',
+              isActive: true,
+            }),
+            mk(3, {
+              name: 'NMB Virtual Card',
+              type: 'credit',
+              balance: opening('NMB Virtual Card'),
+              currency: 'TZS',
+              isActive: true,
+            }),
+            mk(4, {
+              name: 'Selcom',
+              type: 'checking',
+              balance: opening('Selcom'),
+              currency: 'TZS',
+              isActive: true,
+            }),
+          ];
+        } else {
+          // New user: start minimal.
+          accounts = [mk(0, { name: 'Cash', type: 'cash', balance: 0, currency: 'TZS', isActive: true })];
+        }
+
+        await supabaseDatabase.saveAccounts(accounts);
+      }
       dispatch({ type: 'SET_ACCOUNTS', payload: accounts });
 
       // Load subscriptions
@@ -656,6 +748,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  /**
+   * After save, set collection state from `getData() + operation`, not from stale `state + payload`.
+   * Otherwise the UI can disagree with Supabase (e.g. empty local budgets + add → only one row in state while DB has many).
+   */
+  const dispatchAuthoritativeList = <T extends { id: string }>(
+    actionType: AppAction['type'],
+    updatedItems: T[],
+    fallbackAction: AppAction
+  ) => {
+    switch (actionType) {
+      case 'ADD_TRANSACTION':
+      case 'UPDATE_TRANSACTION':
+      case 'DELETE_TRANSACTION':
+        dispatch({ type: 'SET_TRANSACTIONS', payload: updatedItems as unknown as Transaction[] });
+        return;
+      case 'ADD_INVESTMENT':
+      case 'UPDATE_INVESTMENT':
+      case 'DELETE_INVESTMENT':
+        dispatch({ type: 'SET_INVESTMENTS', payload: updatedItems as unknown as Investment[] });
+        return;
+      case 'ADD_BUDGET':
+      case 'UPDATE_BUDGET':
+      case 'DELETE_BUDGET':
+        dispatch({ type: 'SET_BUDGETS', payload: updatedItems as unknown as Budget[] });
+        return;
+      case 'ADD_ACCOUNT':
+      case 'UPDATE_ACCOUNT':
+      case 'DELETE_ACCOUNT':
+        dispatch({ type: 'SET_ACCOUNTS', payload: updatedItems as unknown as Account[] });
+        return;
+      case 'ADD_JOURNAL_ENTRY':
+      case 'UPDATE_JOURNAL_ENTRY':
+      case 'DELETE_JOURNAL_ENTRY':
+        dispatch({ type: 'SET_JOURNAL_ENTRIES', payload: updatedItems as unknown as JournalEntry[] });
+        return;
+      case 'UPDATE_HABIT':
+        dispatch({ type: 'SET_HABITS', payload: updatedItems as unknown as Habit[] });
+        return;
+      case 'UPDATE_HABIT_ENTRY':
+        dispatch({ type: 'SET_HABIT_ENTRIES', payload: updatedItems as unknown as HabitEntry[] });
+        return;
+      default:
+        dispatch(fallbackAction);
+    }
+  };
+
   // Generic CRUD helper
   const performCRUD = async <T extends { id: string }>(
     getData: () => Promise<T[]>,
@@ -667,18 +805,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.log('performCRUD: Getting existing data...');
       const items = await getData();
       console.log('performCRUD: Existing items count:', items.length);
-      
+
       console.log('performCRUD: Applying operation...');
       const updatedItems = operation(items);
       console.log('performCRUD: Updated items count:', updatedItems.length);
-      
+
       console.log('performCRUD: Saving data...');
       await saveData(updatedItems);
       console.log('performCRUD: Data saved successfully');
-      
-      console.log('performCRUD: Dispatching action...');
-      dispatch(action);
-      console.log('performCRUD: Action dispatched');
+
+      console.log('performCRUD: Dispatching synced list...');
+      dispatchAuthoritativeList(action.type, updatedItems, action);
+      console.log('performCRUD: Dispatch complete');
     } catch (error) {
       console.error('performCRUD: Error occurred:', error);
       dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Operation failed' });

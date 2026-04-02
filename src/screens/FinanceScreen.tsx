@@ -14,7 +14,6 @@ import {
   Paragraph,
   FAB,
   Text,
-  SegmentedButtons,
   IconButton,
   List,
   TextInput,
@@ -30,105 +29,56 @@ import { useApp } from '../context/AppContext';
 import { Transaction, Investment, Budget, Subscription, RootStackParamList } from '../types';
 import { formatDate } from '../utils/dateFormat';
 import { scopedStorageKey } from '../services/userSession';
+import {
+  accountCardColor,
+  accountDisplayName,
+  computedBalanceForAccount,
+  formatFinanceAmount,
+  formatExpenseCategoryLabel,
+  pickDefaultAccountName,
+} from '../utils/financeAccounts';
+import { daysLeftInPeriod, remainingBudget, spentForBudget } from '../utils/budgetAnalytics';
 
 type FinanceScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Main'>;
 
-// Category selector component similar to the journal screen's view toggle
-const CategorySelector = ({ 
-  categories, 
-  selectedCategory, 
-  onSelectCategory 
-}: { 
-  categories: string[];
-  selectedCategory: string;
-  onSelectCategory: (category: string) => void;
-}) => {
-  const [showMenu, setShowMenu] = useState(false);
+type FinanceTabValue =
+  | 'overview'
+  | 'budgets'
+  | 'transactions'
+  | 'investments'
+  | 'subscriptions';
 
-  return (
-    <View>
-      <TouchableOpacity
-        onPress={() => setShowMenu(true)}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          paddingHorizontal: 12,
-          paddingVertical: 8,
-          borderRadius: 8,
-          backgroundColor: '#f3f4f6',
-          gap: 6,
-        }}
-      >
-        <Text style={{ fontSize: 14, fontWeight: '600', color: '#6366f1' }}>
-          {selectedCategory || 'Select Category'}
-        </Text>
-        <Ionicons name="chevron-down" size={16} color="#6366f1" />
-      </TouchableOpacity>
-
-      <Modal
-        visible={showMenu}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowMenu(false)}
-      >
-        <TouchableOpacity
-          style={{
-            flex: 1,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-          activeOpacity={1}
-          onPress={() => setShowMenu(false)}
-        >
-          <View
-            style={{
-              backgroundColor: '#fff',
-              borderRadius: 8,
-              paddingVertical: 8,
-              minWidth: 200,
-              elevation: 8,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.25,
-              shadowRadius: 4,
-            }}
-          >
-            {categories.map((category) => (
-              <TouchableOpacity
-                key={category}
-                onPress={() => {
-                  onSelectCategory(category);
-                  setShowMenu(false);
-                }}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  paddingHorizontal: 16,
-                  paddingVertical: 12,
-                  backgroundColor: category === selectedCategory ? '#f3f4f6' : 'transparent',
-                }}
-              >
-                <Text style={{ color: category === selectedCategory ? '#6366f1' : '#374151', fontSize: 16 }}>
-                  {category}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </TouchableOpacity>
-      </Modal>
-    </View>
-  );
-};
+const FINANCE_TAB_ROWS: ReadonlyArray<
+  ReadonlyArray<{ value: FinanceTabValue; label: string; accessibilityLabel: string }>
+> = [
+  [
+    { value: 'overview', label: 'Dashboard', accessibilityLabel: 'Dashboard' },
+    { value: 'budgets', label: 'Budgets', accessibilityLabel: 'Budgets' },
+    { value: 'transactions', label: 'Transactions', accessibilityLabel: 'Transactions' },
+  ],
+  [
+    { value: 'investments', label: 'Investments', accessibilityLabel: 'Investments' },
+    { value: 'subscriptions', label: 'Subscriptions', accessibilityLabel: 'Subscriptions' },
+  ],
+];
 
 const FinanceScreen = () => {
   const navigation = useNavigation<FinanceScreenNavigationProp>();
-  const { state, deleteTransaction, deleteInvestment, deleteBudget, addSubscription, updateSubscription, deleteSubscription, refreshData, processDueSubscriptions } = useApp();
-  const [activeTab, setActiveTab] = useState('overview');
+  const {
+    state,
+    deleteTransaction,
+    deleteInvestment,
+    deleteBudget,
+    addSubscription,
+    updateSubscription,
+    deleteSubscription,
+    refreshData,
+    processDueSubscriptions,
+  } = useApp();
+  const [activeTab, setActiveTab] = useState<FinanceTabValue>('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [transactionLimit, setTransactionLimit] = useState(50);
   const [expandedHistories, setExpandedHistories] = useState<Set<string>>(new Set());
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditingGoals, setIsEditingGoals] = useState(false);
   const [financialGoals, setFinancialGoals] = useState<string[]>([
@@ -229,13 +179,50 @@ const FinanceScreen = () => {
 
   const handleAddSubscription = () => {
     setEditingSubscription(null);
-    setSubscriptionForm({ name: '', amount: '', recurringDate: '1', account: 'Cash' });
+    setSubscriptionForm({
+      name: '',
+      amount: '',
+      recurringDate: '1',
+      account: pickDefaultAccountName(state.accounts),
+    });
     setShowSubscriptionModal(true);
   };
 
   const handleAddBudget = () => {
     navigation.navigate('BudgetDetail', {});
   };
+
+  const renderBudgets = () => (
+    <ScrollView
+      style={styles.scrollView}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
+      <Card style={styles.budgetsCard}>
+        <Card.Content>
+          <View style={styles.budgetsHeaderRow}>
+            <Title>Budgets</Title>
+            <Button mode="contained" onPress={handleAddBudget} style={styles.addBudgetButton}>
+              Add Budget
+            </Button>
+          </View>
+          {getActiveBudgets().length > 0 ? (
+            getActiveBudgets().map((budget) => renderBudgetRow(budget))
+          ) : (
+            <View style={styles.emptyBudgetsContainer}>
+              <Ionicons name="pie-chart-outline" size={56} color="#9ca3af" />
+              <Title style={styles.emptyTitle}>No Budgets Yet</Title>
+              <Paragraph style={styles.emptyDescription}>
+                Create a budget per category to track spend vs your cap.
+              </Paragraph>
+              <Button mode="contained" onPress={handleAddBudget} style={styles.addBudgetButtonEmpty}>
+                Create your first budget
+              </Button>
+            </View>
+          )}
+        </Card.Content>
+      </Card>
+    </ScrollView>
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -248,18 +235,25 @@ const FinanceScreen = () => {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    // If amount is >= 1 million, show in millions
-    if (Math.abs(amount) >= 1000000) {
-      const millions = amount / 1000000;
-      return `TSh ${millions.toFixed(2)}M`;
-    }
-    // Otherwise show full number
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'TZS',
-    }).format(amount);
-  };
+  const formatCurrency = (amount: number, currency: string = 'TZS') =>
+    formatFinanceAmount(amount, currency);
+
+  const activeAccounts = useMemo(
+    () => state.accounts.filter((a) => a.isActive).sort((a, b) => a.name.localeCompare(b.name)),
+    [state.accounts]
+  );
+
+  const totalsCurrency = useMemo(() => {
+    const nonInvestment = activeAccounts.filter((a) => a.type !== 'investment');
+    return nonInvestment[0]?.currency ?? 'TZS';
+  }, [activeAccounts]);
+
+  const liquidTotal = useMemo(() => {
+    // Avoid mixing currencies: sum accounts matching `totalsCurrency`.
+    return activeAccounts
+      .filter((a) => a.type !== 'investment' && a.currency === totalsCurrency)
+      .reduce((sum, a) => sum + computedBalanceForAccount(a, state.transactions), 0);
+  }, [activeAccounts, totalsCurrency, state.transactions]);
 
   const getTotalIncome = () => {
     return state.transactions
@@ -279,100 +273,7 @@ const FinanceScreen = () => {
       .reduce((sum, i) => sum + (i.totalValue || 0), 0);
   };
 
-  const getNetWorth = () => {
-    // Total balance = sum of all account balances
-    return getCashBalance() + getBankBalance() + getMobileBalance();
-  };
-
-  // Calculate balance for each account from transactions
-  const getCashBalance = () => {
-    const cashTransactions = state.transactions
-      .filter(t => t.account === 'Cash')
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    let balance = 0;
-    cashTransactions.forEach(t => {
-      if (t.type === 'income') {
-        balance += t.amount;
-      } else {
-        balance -= t.amount;
-      }
-    });
-
-    return balance;
-  };
-
-  const getNMBMainBalance = () => {
-    const nmbMainTransactions = state.transactions
-      .filter(t => t.account === 'NMB Main A/C')
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    let balance = 340071; // Initial balance
-    nmbMainTransactions.forEach(t => {
-      if (t.type === 'income') {
-        balance += t.amount;
-      } else {
-        balance -= t.amount;
-      }
-    });
-
-    return balance;
-  };
-
-  const getSelcomBalance = () => {
-    const selcomTransactions = state.transactions
-      .filter(t => t.account === 'Selcom')
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    let balance = 4295.75; // Initial balance
-    selcomTransactions.forEach(t => {
-      if (t.type === 'income') {
-        balance += t.amount;
-      } else {
-        balance -= t.amount;
-      }
-    });
-
-    return balance;
-  };
-
-  const getNMBVirtualCardBalance = () => {
-    const nmbVirtualTransactions = state.transactions
-      .filter(t => t.account === 'NMB Virtual Card')
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    let balance = 113818.35; // Initial balance
-    nmbVirtualTransactions.forEach(t => {
-      if (t.type === 'income') {
-        balance += t.amount;
-      } else {
-        balance -= t.amount;
-      }
-    });
-
-    return balance;
-  };
-
-  const getBankBalance = () => {
-    return getNMBMainBalance() + getSelcomBalance() + getNMBVirtualCardBalance();
-  };
-
-  const getMobileBalance = () => {
-    const mobileTransactions = state.transactions
-      .filter(t => t.account === 'Airtel Money' || t.account === 'Mobile')
-      .sort((a, b) => a.date.getTime() - b.date.getTime());
-
-    let balance = 0;
-    mobileTransactions.forEach(t => {
-      if (t.type === 'income') {
-        balance += t.amount;
-      } else {
-        balance -= t.amount;
-      }
-    });
-
-    return balance;
-  };
+  // Legacy hard-coded account balance helpers removed; balances come from `state.accounts`.
 
   const getRecentTransactions = () => {
     return state.transactions
@@ -384,47 +285,63 @@ const FinanceScreen = () => {
     return state.budgets.filter(b => b.isActive);
   };
 
-  // Get all unique expense categories
-  const getExpenseCategories = () => {
-    const categories = state.transactions
-      .filter(t => t.type === 'expense')
-      .map(t => t.category);
-    const uniqueCategories = [...new Set(categories)].sort();
-    // Add "All" option at the beginning
-    return ['All', ...uniqueCategories];
+  const renderBudgetRow = (budget: Budget) => {
+    const spent = spentForBudget(budget, state.transactions);
+    const pctCap = budget.amount > 0 ? (spent / budget.amount) * 100 : 0;
+    const remaining = remainingBudget(spent, budget.amount);
+    const daysLeft = daysLeftInPeriod(budget.period);
+    const barPct = Math.min(pctCap, 100);
+    const barColor =
+      pctCap >= 100 ? '#ef4444' : pctCap >= 80 ? '#f59e0b' : '#10b981';
+    const title = (budget.name || '').trim() || 'Budget';
+    const categoryLabel = formatExpenseCategoryLabel(budget.category ?? '');
+
+    return (
+      <TouchableOpacity
+        key={budget.id}
+        style={styles.budgetItem}
+        onPress={() => navigation.navigate('BudgetDetail', { budgetId: budget.id })}
+        activeOpacity={0.7}
+      >
+        <View style={styles.budgetInfo}>
+          <Text style={styles.budgetName} numberOfLines={2}>
+            {title}
+          </Text>
+          {categoryLabel ? (
+            <Text style={styles.budgetCategory} numberOfLines={1}>
+              {categoryLabel}
+            </Text>
+          ) : null}
+          <Text style={styles.budgetAmount} numberOfLines={1}>
+            {formatCurrency(spent)} / {formatCurrency(budget.amount)}
+          </Text>
+          <Text style={styles.budgetSubline} numberOfLines={2}>
+            {remaining >= 0
+              ? `${formatCurrency(remaining)} left before cap · ${daysLeft} day${
+                  daysLeft === 1 ? '' : 's'
+                } left in period`
+              : `${formatCurrency(Math.abs(remaining))} over cap`}
+          </Text>
+        </View>
+        <View style={styles.budgetProgress}>
+          <View style={styles.progressBar}>
+            <View
+              style={[
+                styles.progressFill,
+                {
+                  width: `${barPct}%`,
+                  backgroundColor: barColor,
+                },
+              ]}
+            />
+          </View>
+          <Text style={[styles.budgetPercentage, { color: barColor }]}>
+            {Math.round(Math.min(pctCap, 999))}%
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
   };
-
-  // Calculate expense for a category over a specific time period
-  const getExpenseForPeriod = (category: string, monthsBack: number) => {
-    if (!category) return 0;
-    
-    const now = new Date();
-    const startDate = new Date(now.getFullYear(), now.getMonth() - monthsBack, now.getDate());
-    
-    return state.transactions
-      .filter(t => {
-        if (t.type !== 'expense') return false;
-        if (t.date < startDate || t.date > now) return false;
-        
-        // Handle "All" category - exclude Money Transfers and Investments
-        if (category === 'All') {
-          return t.category !== 'Money Transfers' && t.category !== 'Investments';
-        }
-        
-        // Handle specific category
-        return t.category === category;
-      })
-      .reduce((sum, t) => sum + t.amount, 0);
-  };
-
-  const expenseCategories = getExpenseCategories();
-
-  // Auto-select "All" category if available
-  React.useEffect(() => {
-    if (!selectedCategory && expenseCategories.length > 0) {
-      setSelectedCategory('All');
-    }
-  }, [expenseCategories.length]);
 
   const loanAnalytics = useMemo(() => {
     const loanTx = state.transactions.filter(
@@ -472,47 +389,15 @@ const FinanceScreen = () => {
     return { loansOut, loansIn, netBalance, loanLines };
   }, [state.transactions]);
 
-  const categoryTrendData = useMemo(() => {
-    if (!selectedCategory) return null;
-
-    const periods = [
-      { label: 'Current Month', months: 1 },
-      { label: 'Last 2 Months', months: 2 },
-      { label: 'Last 3 Months', months: 3 },
-      { label: 'Last 6 Months', months: 6 },
-      { label: 'Last 9 Months', months: 9 },
-      { label: 'Last Year', months: 12 },
-      { label: 'Last 2 Years', months: 24 },
-    ];
-
-    return periods.map(period => {
-      const totalAmount = getExpenseForPeriod(selectedCategory, period.months);
-      const averagePerMonth = period.months > 1 ? totalAmount / period.months : totalAmount;
-      
-      return {
-        ...period,
-        amount: totalAmount,
-        averagePerMonth,
-        isMultiMonth: period.months > 1,
-      };
-    });
-  }, [selectedCategory, state.transactions]);
-
-  // Get last 10 transactions for an account
   const getAccountTransactions = (accountName: string): Transaction[] => {
-    // Map display names to actual account names
-    const accountMap: { [key: string]: string } = {
-      'Cash Balance': 'Cash',
-      'Airtel Money': 'Airtel Money',
-      'NMB Main A/C': 'NMB Main A/C',
-      'NMB Virtual': 'NMB Virtual Card',
-      'Selcom': 'Selcom',
-    };
-    
-    const actualAccountName = accountMap[accountName] || accountName;
-    
     return state.transactions
-      .filter(t => t.account === actualAccountName)
+      .filter((t) => {
+        if (!t.account) return false;
+        if (t.account === accountName) return true;
+        if (accountName === 'Airtel Money' && t.account === 'Mobile') return true;
+        if (accountName === 'NMB Virtual Card' && t.account === 'NMB Virtual') return true;
+        return false;
+      })
       .sort((a, b) => b.date.getTime() - a.date.getTime())
       .slice(0, 10);
   };
@@ -615,77 +500,46 @@ const FinanceScreen = () => {
         </Card.Content>
       </Card>
 
+      <Text style={styles.financeSettingsHint}>
+        Manage accounts (add, remove, currency) in Settings → Finance accounts.
+      </Text>
+
       <View>
-        {/* Row 1: Cash and Airtel Money */}
+        {Array.from({ length: Math.ceil(activeAccounts.length / 2) }).map((_, rowIdx) => {
+          const pair = activeAccounts.slice(rowIdx * 2, rowIdx * 2 + 2);
+          return (
+            <View key={`acc-${rowIdx}`} style={styles.summaryRow}>
+              {pair.map((a) => (
+                <TouchableOpacity
+                  key={a.id}
+                  style={styles.summaryCard}
+                  onPress={() => handleAccountPress(a.name)}
+                >
+                  <Card style={[styles.summaryCardInner, { backgroundColor: accountCardColor(a.id) }]}>
+                    <Card.Content>
+                      <Title style={styles.summaryTitle} numberOfLines={2}>
+                        {accountDisplayName(a.name)}
+                      </Title>
+                      <Text style={styles.summaryAmount}>
+                        {formatCurrency(computedBalanceForAccount(a, state.transactions), a.currency)}
+                      </Text>
+                    </Card.Content>
+                  </Card>
+                </TouchableOpacity>
+              ))}
+              {pair.length === 1 ? <View style={styles.summaryCard} /> : null}
+            </View>
+          );
+        })}
+
         <View style={styles.summaryRow}>
-          <TouchableOpacity onPress={() => handleAccountPress('Cash Balance')}>
-            <Card style={[styles.summaryCard, { backgroundColor: '#9333ea' }]}>
-              <Card.Content>
-                <Title style={styles.summaryTitle}>Cash Balance</Title>
-                <Text style={styles.summaryAmount}>{formatCurrency(getCashBalance())}</Text>
-              </Card.Content>
-            </Card>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => handleAccountPress('Airtel Money')}>
-            <Card style={[styles.summaryCard, { backgroundColor: '#ef4444' }]}>
-              <Card.Content>
-                <Title style={styles.summaryTitle}>Airtel Money</Title>
-                <Text style={styles.summaryAmount}>{formatCurrency(getMobileBalance())}</Text>
-              </Card.Content>
-            </Card>
-          </TouchableOpacity>
-        </View>
-
-        {/* Row 2: NMB Main and NMB Virtual */}
-        <View style={styles.summaryRow}>
-          <TouchableOpacity onPress={() => handleAccountPress('NMB Main A/C')}>
-            <Card style={[styles.summaryCard, { backgroundColor: '#3b82f6' }]}>
-              <Card.Content>
-                <Title style={styles.summaryTitle}>NMB Main A/C</Title>
-                <Text style={styles.summaryAmount}>{formatCurrency(getNMBMainBalance())}</Text>
-              </Card.Content>
-            </Card>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => handleAccountPress('NMB Virtual')}>
-            <Card style={[styles.summaryCard, { backgroundColor: '#1e40af' }]}>
-              <Card.Content>
-                <Title style={styles.summaryTitle}>NMB Virtual</Title>
-                <Text style={styles.summaryAmount}>{formatCurrency(getNMBVirtualCardBalance())}</Text>
-              </Card.Content>
-            </Card>
-          </TouchableOpacity>
-        </View>
-
-        {/* Row 3: Selcom and placeholder */}
-        <View style={styles.summaryRow}>
-          <TouchableOpacity onPress={() => handleAccountPress('Selcom')}>
-            <Card style={[styles.summaryCard, { backgroundColor: '#1f2937' }]}>
-              <Card.Content>
-                <Title style={styles.summaryTitle}>Selcom</Title>
-                <Text style={styles.summaryAmount}>{formatCurrency(getSelcomBalance())}</Text>
-              </Card.Content>
-            </Card>
-          </TouchableOpacity>
-
-          <Card style={[styles.summaryCard, { backgroundColor: '#9ca3af' }]}>
-            <Card.Content>
-              <Title style={styles.summaryTitle}>Future Account</Title>
-              <Text style={styles.summaryAmount}>-</Text>
-            </Card.Content>
-          </Card>
-        </View>
-
-        {/* Row 4: Liquid Cash */}
-        <View style={styles.summaryRow}>
-          <Card style={[styles.summaryCard, styles.liquidCashCard, { backgroundColor: '#1f2937' }]}>
+          <Card style={[styles.liquidCashCard, { flex: 1, backgroundColor: '#1f2937' }]}>
             <Card.Content>
               <View style={styles.liquidCashHeader}>
                 <Title style={styles.summaryTitle}>Liquid Cash</Title>
-                <Text style={styles.totalLabel}>Total</Text>
+                <Text style={styles.totalLabel}>{totalsCurrency}</Text>
               </View>
-              <Text style={styles.summaryAmount}>{formatCurrency(getNetWorth())}</Text>
+              <Text style={styles.summaryAmount}>{formatCurrency(liquidTotal, totalsCurrency)}</Text>
             </Card.Content>
           </Card>
         </View>
@@ -816,68 +670,6 @@ const FinanceScreen = () => {
         </Card.Content>
       </Card>
 
-      <Card style={styles.categoryTrendCard}>
-        <Card.Content>
-          <View style={styles.categoryTrendHeader}>
-            <Title>Category Spending Trends</Title>
-            <CategorySelector
-              categories={expenseCategories}
-              selectedCategory={selectedCategory}
-              onSelectCategory={setSelectedCategory}
-            />
-          </View>
-          
-          {selectedCategory && categoryTrendData && (
-            <View style={styles.trendList}>
-              {categoryTrendData.map((data, index) => {
-                const currentMonth = categoryTrendData[0]; // First item is current month
-                const compareWithCurrent = data.isMultiMonth && currentMonth;
-                const comparison = compareWithCurrent 
-                  ? ((data.averagePerMonth - currentMonth.amount) / currentMonth.amount) * 100 
-                  : 0;
-                const isHigher = comparison > 5; // 5% threshold
-                const isLower = comparison < -5;
-
-                return (
-                  <View key={index} style={styles.trendItem}>
-                    <View style={styles.trendInfo}>
-                      <Text style={styles.trendLabel}>{data.label}</Text>
-                      {data.isMultiMonth ? (
-                        <>
-                          <Text style={styles.trendAmount}>
-                            Avg: {formatCurrency(data.averagePerMonth)}/mo
-                          </Text>
-                          <Text style={styles.trendTotal}>
-                            Total: {formatCurrency(data.amount)} ({data.months} months)
-                          </Text>
-                          {compareWithCurrent && (
-                            <Text style={[
-                              styles.trendComparison,
-                              { color: isHigher ? '#ef4444' : isLower ? '#10b981' : '#6b7280' }
-                            ]}>
-                              {isHigher ? '↑' : isLower ? '↓' : '→'} 
-                              {' '}{Math.abs(Math.round(comparison))}% vs current month
-                            </Text>
-                          )}
-                        </>
-                      ) : (
-                        <Text style={styles.trendAmount}>
-                          {formatCurrency(data.amount)}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          )}
-
-          {expenseCategories.length === 0 && (
-            <Text style={styles.emptyText}>No expense transactions yet</Text>
-          )}
-        </Card.Content>
-      </Card>
-
       <Card style={styles.recentCard}>
         <Card.Content>
           <Title>Recent Transactions</Title>
@@ -908,35 +700,7 @@ const FinanceScreen = () => {
         <Card.Content>
           <Title>Active Budgets</Title>
           {getActiveBudgets().length > 0 ? (
-            getActiveBudgets().map((budget) => {
-              const spentPercentage = (budget.spent / budget.amount) * 100;
-              return (
-                <View key={budget.id} style={styles.budgetItem}>
-                  <View style={styles.budgetInfo}>
-                    <Text style={styles.budgetName}>{budget.name}</Text>
-                    <Text style={styles.budgetAmount}>
-                      {formatCurrency(budget.spent)} / {formatCurrency(budget.amount)}
-                    </Text>
-                  </View>
-                  <View style={styles.budgetProgress}>
-                    <View style={styles.progressBar}>
-                      <View 
-                        style={[
-                          styles.progressFill, 
-                          { 
-                            width: `${Math.min(spentPercentage, 100)}%`,
-                            backgroundColor: spentPercentage > 100 ? '#ef4444' : '#10b981'
-                          }
-                        ]} 
-                      />
-                    </View>
-                    <Text style={styles.budgetPercentage}>
-                      {Math.round(spentPercentage)}%
-                    </Text>
-                  </View>
-                </View>
-              );
-            })
+            getActiveBudgets().map((budget) => renderBudgetRow(budget))
           ) : (
             <Text style={styles.emptyText}>No active budgets</Text>
           )}
@@ -965,11 +729,11 @@ const FinanceScreen = () => {
               getAccountTransactions(selectedAccount).map((transaction) => (
                 <Card key={transaction.id} style={styles.transactionCard}>
                   <Card.Content>
-                    <View style={styles.transactionRow}>
-                      <View style={styles.transactionInfo}>
+                    <View style={styles.modalTransactionRow}>
+                      <View style={styles.modalTransactionInfo}>
                         <Text style={styles.transactionDescription}>{transaction.description}</Text>
-                        <Text style={styles.transactionCategory}>{transaction.category}</Text>
-                        <Text style={styles.transactionDate}>{formatDate(transaction.date)}</Text>
+                        <Text style={styles.modalTransactionCategory}>{transaction.category}</Text>
+                        <Text style={styles.modalTransactionDate}>{formatDate(transaction.date)}</Text>
                       </View>
                       <View style={styles.transactionAmountContainer}>
                         <Text
@@ -1380,18 +1144,18 @@ const FinanceScreen = () => {
                     <>
                       {investmentTransactions.length > 0 ? (
                         investmentTransactions.map((transaction) => (
-                          <View key={transaction.id} style={styles.transactionRow}>
-                            <View style={styles.transactionInfo}>
-                              <Text style={styles.transactionDate}>
+                          <View key={transaction.id} style={styles.investmentHistoryRow}>
+                            <View style={styles.investmentHistoryInfo}>
+                              <Text style={styles.investmentHistoryDate}>
                                 {formatDate(transaction.date)}
                               </Text>
                               {transaction.account && (
-                                <Text style={styles.transactionAccount}>
+                                <Text style={styles.investmentHistoryAccount}>
                                   {transaction.account}
                                 </Text>
                               )}
                             </View>
-                            <Text style={styles.transactionAmount}>
+                            <Text style={styles.investmentHistoryAmount}>
                               {formatCurrency(transaction.amount)}
                             </Text>
                           </View>
@@ -1732,20 +1496,45 @@ const FinanceScreen = () => {
   return (
     <View style={styles.container}>
       <View style={styles.tabContainer}>
-        <SegmentedButtons
-          value={activeTab}
-          onValueChange={setActiveTab}
-          buttons={[
-            { value: 'overview', label: 'Overview' },
-            { value: 'transactions', label: 'Transactions' },
-            { value: 'investments', label: 'Investments' },
-            { value: 'subscriptions', label: 'Subscriptions' },
-          ]}
-          style={styles.segmentedButtons}
-        />
+        <View style={styles.financeTabGrid} accessibilityRole="tablist">
+          {FINANCE_TAB_ROWS.map((row, rowIndex) => (
+            <View
+              key={`tab-row-${rowIndex}`}
+              style={[
+                styles.financeTabRow,
+                rowIndex < FINANCE_TAB_ROWS.length - 1 && styles.financeTabRowSpacing,
+              ]}
+            >
+              {row.map((tab) => {
+                const selected = activeTab === tab.value;
+                return (
+                  <TouchableOpacity
+                    key={tab.value}
+                    style={[styles.financeTabButton, selected && styles.financeTabButtonSelected]}
+                    onPress={() => setActiveTab(tab.value)}
+                    activeOpacity={0.7}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={tab.accessibilityLabel}
+                  >
+                    <Text
+                      style={[styles.financeTabLabel, selected && styles.financeTabLabelSelected]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.85}
+                    >
+                      {tab.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ))}
+        </View>
       </View>
 
       {activeTab === 'overview' && renderOverview()}
+      {activeTab === 'budgets' && renderBudgets()}
       {activeTab === 'transactions' && renderTransactions()}
       {activeTab === 'investments' && renderInvestments()}
       {activeTab === 'subscriptions' && renderSubscriptions()}
@@ -1755,12 +1544,14 @@ const FinanceScreen = () => {
         style={styles.fab}
         onPress={
           activeTab === 'overview' ? handleAddTransaction :
+          activeTab === 'budgets' ? handleAddBudget :
           activeTab === 'transactions' ? handleAddTransaction :
           activeTab === 'investments' ? handleAddInvestment :
           handleAddSubscription
         }
         label={
           activeTab === 'overview' ? 'Add Transaction' :
+          activeTab === 'budgets' ? 'Add Budget' :
           activeTab === 'transactions' ? 'Add Transaction' :
           activeTab === 'investments' ? 'Add Investment' :
           'Add Subscription'
@@ -1779,12 +1570,61 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 8,
   },
-  segmentedButtons: {
+  financeTabGrid: {
     backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  financeTabRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  financeTabRowSpacing: {
+    marginBottom: 4,
+  },
+  financeTabButton: {
+    flex: 1,
+    minHeight: 32,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    borderRadius: 6,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  financeTabButtonSelected: {
+    backgroundColor: '#6366f1',
+  },
+  financeTabLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  financeTabLabelSelected: {
+    color: '#fff',
   },
   scrollView: {
     flex: 1,
     padding: 16,
+  },
+  financeSettingsHint: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 12,
+    marginTop: -4,
+  },
+  card: {
+    marginBottom: 16,
+    backgroundColor: '#fff',
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1e293b',
   },
   summaryCards: {
     flexDirection: 'row',
@@ -1799,6 +1639,9 @@ const styles = StyleSheet.create({
   },
   summaryCard: {
     flex: 1,
+  },
+  summaryCardInner: {
+    borderRadius: 12,
   },
   summaryTitle: {
     color: '#fff',
@@ -1933,6 +1776,24 @@ const styles = StyleSheet.create({
   budgetsCard: {
     marginBottom: 16,
   },
+  budgetsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
+  },
+  addBudgetButton: {
+    backgroundColor: '#6366f1',
+  },
+  emptyBudgetsContainer: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  addBudgetButtonEmpty: {
+    marginTop: 12,
+    backgroundColor: '#6366f1',
+  },
   goalsCard: {
     marginBottom: 16,
     elevation: 4,
@@ -2021,43 +1882,71 @@ const styles = StyleSheet.create({
   },
   budgetItem: {
     marginBottom: 12,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   budgetInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+    width: '100%',
   },
   budgetName: {
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  budgetCategory: {
+    fontSize: 12,
+    color: '#6366f1',
+    marginTop: 4,
     fontWeight: '600',
   },
   budgetAmount: {
+    fontSize: 13,
+    color: '#475569',
+    marginTop: 6,
+    fontWeight: '500',
+  },
+  budgetSubline: {
     fontSize: 12,
-    color: '#6b7280',
+    color: '#64748b',
+    marginTop: 4,
+    lineHeight: 16,
   },
   budgetProgress: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    marginTop: 10,
+    width: '100%',
   },
   progressBar: {
     flex: 1,
-    height: 6,
+    flexGrow: 1,
+    minWidth: 0,
+    height: 8,
     backgroundColor: '#e5e7eb',
-    borderRadius: 3,
+    borderRadius: 4,
+    overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 4,
   },
   budgetPercentage: {
-    fontSize: 12,
-    fontWeight: '600',
-    minWidth: 40,
+    fontSize: 13,
+    fontWeight: '700',
+    minWidth: 44,
     textAlign: 'right',
+    color: '#0f172a',
   },
   transactionCard: {
     marginBottom: 12,
+    elevation: 2,
   },
   transactionHeader: {
     flexDirection: 'row',
@@ -2236,7 +2125,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#374151',
   },
-  transactionRow: {
+  investmentHistoryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -2246,20 +2135,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginBottom: 6,
   },
-  transactionInfo: {
+  investmentHistoryInfo: {
     flex: 1,
   },
-  transactionDate: {
+  investmentHistoryDate: {
     fontSize: 13,
     fontWeight: '500',
     color: '#374151',
     marginBottom: 2,
   },
-  transactionAccount: {
+  investmentHistoryAccount: {
     fontSize: 11,
     color: '#6b7280',
   },
-  transactionAmount: {
+  investmentHistoryAmount: {
     fontSize: 14,
     fontWeight: '600',
     color: '#ef4444',
@@ -2333,51 +2222,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     textTransform: 'uppercase',
   },
-  categoryTrendCard: {
-    marginBottom: 16,
-  },
-  categoryTrendHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  trendList: {
-    gap: 8,
-  },
-  trendItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  trendInfo: {
-    flex: 1,
-  },
-  trendLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#374151',
-    marginBottom: 2,
-  },
-  trendAmount: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 2,
-  },
-  trendTotal: {
-    fontSize: 12,
-    color: '#6b7280',
-    marginBottom: 2,
-  },
-  trendComparison: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 2,
-  },
   modalContainer: {
     flex: 1,
     backgroundColor: '#f8fafc',
@@ -2420,16 +2264,12 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderColor: '#6366f1',
   },
-  transactionCard: {
-    marginBottom: 12,
-    elevation: 2,
-  },
-  transactionRow: {
+  modalTransactionRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
-  transactionInfo: {
+  modalTransactionInfo: {
     flex: 1,
     marginRight: 12,
   },
@@ -2439,21 +2279,17 @@ const styles = StyleSheet.create({
     color: '#374151',
     marginBottom: 4,
   },
-  transactionCategory: {
+  modalTransactionCategory: {
     fontSize: 14,
     color: '#6b7280',
     marginBottom: 4,
   },
-  transactionDate: {
+  modalTransactionDate: {
     fontSize: 12,
     color: '#9ca3af',
   },
   transactionAmountContainer: {
     alignItems: 'flex-end',
-  },
-  transactionAmount: {
-    fontSize: 16,
-    fontWeight: 'bold',
   },
   incomeAmount: {
     color: '#10b981',

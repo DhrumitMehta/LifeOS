@@ -581,10 +581,26 @@ class SupabaseDatabase {
     }
   }
 
+  /** DB null/false on is_active should not hide budgets in the UI; coerce spent to number. */
+  private normalizeBudget(b: Budget): Budget {
+    const spent =
+      typeof b.spent === 'number' && !Number.isNaN(b.spent)
+        ? b.spent
+        : typeof (b as unknown as { spent?: string }).spent === 'string'
+          ? parseFloat((b as unknown as { spent: string }).spent) || 0
+          : 0;
+    return {
+      ...b,
+      isActive: b.isActive !== false,
+      spent,
+    };
+  }
+
   // Budgets
   getBudgets = async (): Promise<Budget[]> => {
     if (!this.useSupabase) {
-      return this.getAsyncStorageData<Budget>(this.k('budgets'));
+      const local = await this.getAsyncStorageData<Budget>(this.k('budgets'));
+      return local.map((b) => this.normalizeBudget(b));
     }
 
     try {
@@ -596,10 +612,12 @@ class SupabaseDatabase {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data?.map((budget) => this.deserializeEntity<Budget>(budget)) || [];
+      const rows = data?.map((budget) => this.deserializeEntity<Budget>(budget)) || [];
+      return rows.map((b) => this.normalizeBudget(b));
     } catch (error) {
       console.error('Error getting budgets:', error);
-      return this.getAsyncStorageData<Budget>(this.k('budgets'));
+      const fallback = await this.getAsyncStorageData<Budget>(this.k('budgets'));
+      return fallback.map((b) => this.normalizeBudget(b));
     }
   }
 

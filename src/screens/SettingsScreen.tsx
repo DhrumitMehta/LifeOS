@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -44,7 +44,13 @@ import { useAuth } from '../context/AuthContext';
 import { useTabBarPreferences, TabBarOptionalTab } from '../context/TabBarPreferencesContext';
 import { scopedStorageKey } from '../services/userSession';
 import { REPLAY_TUTORIAL_EVENT } from '../components/OnboardingTutorial';
-import { Habit } from '../types';
+import { Account, Habit } from '../types';
+import {
+  accountCardColor,
+  accountDisplayName,
+  computedBalanceForAccount,
+  formatFinanceAmount,
+} from '../utils/financeAccounts';
 
 const defaultNewHabit = {
   name: '',
@@ -57,7 +63,17 @@ const defaultNewHabit = {
 };
 
 const SettingsScreen = () => {
-  const { state, refreshData, addCategory, updateCategory, deleteCategory, addHabit, deleteHabit } = useApp();
+  const {
+    state,
+    refreshData,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    addHabit,
+    deleteHabit,
+    addAccount,
+    deleteAccount,
+  } = useApp();
   const { user, logout } = useAuth();
   const { visibility: tabBarVisibility, setTabVisible } = useTabBarPreferences();
 
@@ -85,6 +101,85 @@ const SettingsScreen = () => {
   // Habits management
   const [showHabitModal, setShowHabitModal] = useState(false);
   const [newHabit, setNewHabit] = useState(defaultNewHabit);
+
+  const [showAddAccountModal, setShowAddAccountModal] = useState(false);
+  const [newAccountName, setNewAccountName] = useState('');
+  const [newAccountType, setNewAccountType] = useState<Account['type']>('cash');
+  const [newAccountCurrency, setNewAccountCurrency] = useState('TZS');
+  const [newAccountOpening, setNewAccountOpening] = useState('0');
+
+  const financeAccountsSorted = useMemo(
+    () => state.accounts.filter((a) => a.isActive).sort((a, b) => a.name.localeCompare(b.name)),
+    [state.accounts]
+  );
+
+  const defaultFinanceCurrency = useMemo(() => {
+    const ni = financeAccountsSorted.filter((a) => a.type !== 'investment');
+    return ni[0]?.currency ?? 'TZS';
+  }, [financeAccountsSorted]);
+
+  const openAddFinanceAccount = () => {
+    setNewAccountName('');
+    setNewAccountType('cash');
+    setNewAccountCurrency(defaultFinanceCurrency);
+    setNewAccountOpening('0');
+    setShowAddAccountModal(true);
+  };
+
+  const submitAddFinanceAccount = async () => {
+    const name = newAccountName.trim();
+    if (!name) {
+      Alert.alert('Error', 'Account name is required');
+      return;
+    }
+    const opening = parseFloat(newAccountOpening.replace(/,/g, ''));
+    if (Number.isNaN(opening)) {
+      Alert.alert('Error', 'Opening balance must be a number');
+      return;
+    }
+    try {
+      await addAccount({
+        name,
+        type: newAccountType,
+        balance: opening,
+        currency: newAccountCurrency,
+        isActive: true,
+      });
+      setShowAddAccountModal(false);
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Could not add account');
+    }
+  };
+
+  const removeFinanceAccount = (account: Account) => {
+    const activeCount = state.accounts.filter((a) => a.isActive).length;
+    if (activeCount <= 1) {
+      Alert.alert('Cannot remove', 'Keep at least one account.');
+      return;
+    }
+    const subRefs = state.subscriptions.filter((s) => s.isActive && s.account === account.name);
+    if (subRefs.length > 0) {
+      Alert.alert(
+        'In use',
+        `Update subscriptions that charge "${account.name}" before removing this account.`
+      );
+      return;
+    }
+    Alert.alert('Remove account', `Remove "${accountDisplayName(account.name)}"?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteAccount(account.id);
+          } catch {
+            Alert.alert('Error', 'Could not remove account');
+          }
+        },
+      },
+    ]);
+  };
 
   const handleExportData = () => {
     Alert.alert(
@@ -441,6 +536,110 @@ const SettingsScreen = () => {
           ))}
         </Card.Content>
       </Card>
+
+      <Card style={styles.card}>
+        <Card.Content>
+          <View style={styles.financeAccountsHeader}>
+            <Title style={styles.cardTitle}>Finance accounts</Title>
+            <Button mode="contained-tonal" compact icon="plus" onPress={openAddFinanceAccount}>
+              Add
+            </Button>
+          </View>
+          <Text style={styles.descriptionText}>
+            Choose which cash and bank accounts appear on the Finance tab. Set currency per account; balances stay
+            opening balance plus transactions.
+          </Text>
+          <Divider style={styles.divider} />
+          {financeAccountsSorted.map((a) => (
+            <View
+              key={a.id}
+              style={[styles.financeAccountRow, { borderLeftColor: accountCardColor(a.id) }]}
+            >
+              <View style={styles.financeAccountText}>
+                <Text style={styles.financeAccountName}>{accountDisplayName(a.name)}</Text>
+                <Text style={styles.financeAccountMeta}>
+                  {a.type} · {a.currency} · opening {formatFinanceAmount(a.balance, a.currency)}
+                </Text>
+                <Text style={styles.financeAccountBalance}>
+                  Balance:{' '}
+                  {formatFinanceAmount(computedBalanceForAccount(a, state.transactions), a.currency)}
+                </Text>
+              </View>
+              <IconButton icon="delete-outline" onPress={() => removeFinanceAccount(a)} />
+            </View>
+          ))}
+        </Card.Content>
+      </Card>
+
+      <Modal
+        visible={showAddAccountModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddAccountModal(false)}
+      >
+        <View style={styles.addFinanceAccountBackdrop}>
+          <Card style={styles.addFinanceAccountCard}>
+            <Card.Content>
+              <Title style={styles.cardTitle}>Add account</Title>
+              <TextInput
+                label="Name"
+                mode="outlined"
+                value={newAccountName}
+                onChangeText={setNewAccountName}
+                style={styles.categoryInput}
+              />
+              <Text style={styles.financeModalLabel}>Type</Text>
+              <View style={styles.financeAccountChips}>
+                {(['cash', 'checking', 'savings', 'credit', 'investment', 'other'] as const).map((t) => (
+                  <Chip
+                    key={t}
+                    selected={newAccountType === t}
+                    onPress={() => setNewAccountType(t)}
+                    style={styles.financeAccountChip}
+                    selectedColor="#6366f1"
+                  >
+                    {t}
+                  </Chip>
+                ))}
+              </View>
+              <Text style={styles.financeModalLabel}>Currency</Text>
+              <View style={styles.financeAccountChips}>
+                {(['TZS', 'USD', 'EUR', 'GBP', 'KES'] as const).map((c) => (
+                  <Chip
+                    key={c}
+                    selected={newAccountCurrency === c}
+                    onPress={() => setNewAccountCurrency(c)}
+                    style={styles.financeAccountChip}
+                    selectedColor="#6366f1"
+                  >
+                    {c}
+                  </Chip>
+                ))}
+              </View>
+              <TextInput
+                label="Opening balance"
+                mode="outlined"
+                keyboardType="decimal-pad"
+                value={newAccountOpening}
+                onChangeText={setNewAccountOpening}
+                style={styles.categoryInput}
+              />
+              <View style={styles.formButtons}>
+                <Button
+                  mode="outlined"
+                  onPress={() => setShowAddAccountModal(false)}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </Button>
+                <Button mode="contained" onPress={() => void submitAddFinanceAccount()} style={styles.saveButton}>
+                  Save
+                </Button>
+              </View>
+            </Card.Content>
+          </Card>
+        </View>
+      </Modal>
 
       {/* Data Statistics */}
       <Card style={styles.card}>
@@ -1376,6 +1575,69 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     fontStyle: 'italic',
     paddingVertical: 24,
+  },
+  financeAccountsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  financeAccountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingLeft: 12,
+    marginBottom: 4,
+    borderLeftWidth: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#fafafa',
+    borderRadius: 8,
+  },
+  financeAccountText: {
+    flex: 1,
+    marginRight: 8,
+  },
+  financeAccountName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  financeAccountMeta: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
+  financeAccountBalance: {
+    fontSize: 13,
+    color: '#374151',
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  financeAccountChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  financeAccountChip: {
+    marginBottom: 4,
+  },
+  financeModalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  addFinanceAccountBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  addFinanceAccountCard: {
+    borderRadius: 14,
   },
 });
 

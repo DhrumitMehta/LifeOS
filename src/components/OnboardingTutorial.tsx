@@ -30,6 +30,11 @@ const STEPS: Step[] = [
     body: 'You do not need every area. Open Settings → Bottom tabs to turn Habits, Journal, Finance, or Visualization on or off. Hidden screens still work for reminders and deep links.',
   },
   {
+    icon: 'wallet-outline',
+    title: 'Finance accounts',
+    body: 'Set up your cash and bank accounts under Settings → Finance accounts: add or remove accounts, choose currency per account, and see each one with its own color on the Finance tab.',
+  },
+  {
     icon: 'menu-outline',
     title: 'Menu',
     body: 'Tap the menu (top-left) for Profile, Analytics, Reviews, and Settings — including data refresh and account.',
